@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://digitalt3.com/schemas/event-envelope/1.0.0",
+  "title": "DT3 Commons Event Envelope",
+  "description": "Generic event wrapper for any DT3 event type",
+  "type": "object",
+  "required": ["event_type", "event_version", "timestamp", "payload"],
+  "properties": {
+    "event_type": {
+      "type": "string",
+      "description": "Type discriminator for the event"
+    },
+    "event_version": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+\\.\\d+$",
+      "description": "Version of the event schema"
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "description": "When the event was created"
+    },
+    "source": {
+      "type": "string",
+      "description": "Service that produced the event"
+    },
+    "correlation_id": {
+      "type": "string",
+      "description": "Business correlation ID"
+    },
+    "tenant_id": {
+      "type": "string",
+      "description": "Tenant identifier"
+    },
+    "payload": {
+      "type": "object",
+      "description": "Event-specific payload"
+    },
+    "metadata": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "Additional metadata"
+    }
+  }
+}

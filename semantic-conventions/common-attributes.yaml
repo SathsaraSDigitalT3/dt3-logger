@@ -1,0 +1,36 @@
+attributes:
+  - name: timestamp
+    type: string
+    description: ISO 8601 timestamp
+    required: true
+    source: DT3
+  - name: severity
+    type: string
+    description: Log severity
+    required: true
+    source: DT3
+  - name: message
+    type: string
+    description: Log message
+    required: true
+    source: DT3
+  - name: schema.version
+    type: string
+    description: Schema version
+    required: true
+    source: DT3
+  - name: sdk.name
+    type: string
+    description: SDK package name
+    required: true
+    source: OTel
+  - name: sdk.version
+    type: string
+    description: SDK version
+    required: true
+    source: OTel
+  - name: attributes
+    type: object
+    description: Custom attributes
+    required: false
+    source: DT3

@@ -1,0 +1,23 @@
+{
+  "name": "digitalt3-commons",
+  "version": "0.1.0",
+  "private": true,
+  "description": "DT3 Commons Platform SDK - Cross-language, cloud-agnostic, OpenTelemetry-aligned platform SDK",
+  "workspaces": [
+    "packages/node"
+  ],
+  "scripts": {
+    "test": "npm run test:node",
+    "test:node": "cd packages/node && npm test",
+    "build": "cd packages/node && npm run build",
+    "lint": "cd packages/node && npx eslint src/",
+    "validate-schemas": "python tools/schema-validator/validate_schemas.py"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/digitalt3/digitalt3-commons.git"
+  },
+  "keywords": ["logging", "observability", "opentelemetry", "multi-tenant", "sdk", "platform"],
+  "author": "DigitalT3",
+  "license": "MIT"
+}

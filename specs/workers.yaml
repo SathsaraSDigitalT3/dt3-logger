@@ -1,0 +1,26 @@
+spec:
+  name: workers
+  version: "1.0.0"
+  status: draft
+  description: >
+    Defines the worker and job processing standard for DT3 Commons.
+    Workers must propagate trace and tenant context.
+
+worker_context:
+  description: >
+    When processing background jobs, workers must:
+    - Extract tenant context from job metadata
+    - Create or continue trace context
+    - Log structured events for job lifecycle
+
+  lifecycle_events:
+    - WORKER_JOB_RECEIVED
+    - WORKER_JOB_STARTED
+    - WORKER_JOB_COMPLETED
+    - WORKER_JOB_FAILED
+    - WORKER_JOB_RETRIED
+
+  context_propagation:
+    - Tenant context must be serialized into job payload
+    - Trace context must be serialized into job metadata
+    - Correlation ID must be preserved across async boundaries

@@ -1,0 +1,75 @@
+spec:
+  name: config
+  version: "1.0.0"
+  status: stable
+  description: >
+    Defines the SDK configuration standard for DT3 Commons.
+
+configuration_fields:
+  required:
+    - name: service.name
+      type: string
+      description: Name of the service using the SDK
+    - name: service.version
+      type: string
+      description: Version of the service
+    - name: deployment.environment
+      type: string
+      description: Deployment environment (dev, staging, production)
+
+  optional:
+    - name: schema.version
+      type: string
+      default: "1.0.0"
+      description: Schema version for log events
+    - name: sdk.name
+      type: string
+      default: auto-detected per language
+      description: SDK package name
+    - name: sdk.version
+      type: string
+      default: auto-detected per language
+      description: SDK package version
+    - name: validation.mode
+      type: string
+      enum: [STRICT, LENIENT, "OFF"]
+      default: LENIENT
+      description: Schema validation mode
+    - name: fail_open
+      type: boolean
+      default: true
+      description: Whether SDK errors should be swallowed
+    - name: exporter
+      type: string
+      enum: [stdout, file, http, otlp]
+      default: stdout
+      description: Log export destination
+    - name: exporter.file.path
+      type: string
+      description: File path for file exporter
+    - name: exporter.http.endpoint
+      type: string
+      description: HTTP endpoint for HTTP exporter
+    - name: exporter.http.timeout_ms
+      type: integer
+      default: 5000
+      description: HTTP exporter timeout
+    - name: masking.enabled
+      type: boolean
+      default: true
+      description: Whether masking is enabled
+    - name: masking.fields
+      type: list<string>
+      description: Additional sensitive fields to mask
+    - name: batching.enabled
+      type: boolean
+      default: false
+      description: Whether batching is enabled
+    - name: batching.max_size
+      type: integer
+      default: 100
+      description: Maximum batch size
+    - name: batching.flush_interval_ms
+      type: integer
+      default: 5000
+      description: Batch flush interval

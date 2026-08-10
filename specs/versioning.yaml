@@ -1,0 +1,30 @@
+spec:
+  name: versioning
+  version: "1.0.0"
+  status: stable
+  description: >
+    Defines the versioning and backward compatibility standard.
+
+principles:
+  - All specs, schemas, and SDKs follow Semantic Versioning (semver.org)
+  - MAJOR version for incompatible contract changes
+  - MINOR version for backward-compatible additions
+  - PATCH version for backward-compatible fixes
+
+schema_versioning:
+  - schema.version is included in every log event
+  - Schema changes must be backward compatible within a MAJOR version
+  - New optional fields are a MINOR change
+  - Removing or renaming fields is a MAJOR change
+
+sdk_versioning:
+  - Each language SDK has its own version
+  - SDK version is included in every log event as sdk.version
+  - All SDKs targeting the same spec version must produce compatible events
+
+compatibility_rules:
+  - Adding optional fields: backward compatible
+  - Adding new exporters: backward compatible
+  - Changing default values: requires MINOR version bump
+  - Removing fields: requires MAJOR version bump
+  - Changing field types: requires MAJOR version bump

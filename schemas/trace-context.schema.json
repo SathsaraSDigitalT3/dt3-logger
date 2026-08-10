@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://digitalt3.com/schemas/trace-context/1.0.0",
+  "title": "DT3 Commons Trace Context",
+  "description": "Distributed trace context structure",
+  "type": "object",
+  "properties": {
+    "trace_id": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{32}$",
+      "description": "W3C Trace Context trace-id (32 hex chars)"
+    },
+    "span_id": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{16}$",
+      "description": "W3C Trace Context span-id (16 hex chars)"
+    },
+    "parent_span_id": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{16}$",
+      "description": "Parent span identifier"
+    },
+    "correlation_id": {
+      "type": "string",
+      "description": "Business-level correlation ID (UUID v4)"
+    },
+    "trace_flags": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{2}$",
+      "description": "W3C trace flags"
+    }
+  }
+}

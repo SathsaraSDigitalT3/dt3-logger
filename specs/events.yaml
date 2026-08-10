@@ -1,0 +1,46 @@
+spec:
+  name: events
+  version: "1.0.0"
+  status: stable
+  description: >
+    Defines the event envelope standard for DT3 Commons.
+    Events are the universal unit of observability data.
+
+event_envelope:
+  required_fields:
+    - timestamp
+    - severity
+    - message
+    - event.name
+    - schema.version
+    - sdk.name
+    - sdk.version
+    - service.name
+    - service.version
+    - deployment.environment
+
+  optional_fields:
+    - trace.id
+    - span.id
+    - parent.span.id
+    - correlation.id
+    - tenant.id
+    - tenant.region
+    - tenant.environment
+    - user.id
+    - session.id
+    - duration.ms
+    - error.type
+    - error.message
+    - error.stack
+    - error.code
+    - error.retryable
+    - attributes
+    - dt3.validation.errors
+    - dt3.security.masked_fields
+
+  naming_rules:
+    - Use dot-separated attribute names
+    - Align with OpenTelemetry semantic conventions where applicable
+    - Use dt3.* namespace for DT3-specific attributes
+    - event.name uses UPPER_SNAKE_CASE

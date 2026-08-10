@@ -1,0 +1,53 @@
+spec:
+  name: masking
+  version: "1.0.0"
+  status: stable
+  description: >
+    Defines the sensitive data masking standard for DT3 Commons.
+    Masking is applied recursively to log events before export.
+
+default_sensitive_fields:
+  - password
+  - passwd
+  - pwd
+  - secret
+  - token
+  - access_token
+  - refresh_token
+  - authorization
+  - api_key
+  - apikey
+  - private_key
+  - credit_card
+  - card_number
+  - ssn
+  - nic
+  - national_id
+  - email
+  - phone
+
+masking_engine:
+  interface:
+    methods:
+      - name: mask
+        parameters:
+          - name: data
+            type: any
+            description: Object, array, or primitive to mask
+        returns: masked copy of the data
+
+  rules:
+    - Case-insensitive field name matching
+    - Recursive object traversal (nested objects)
+    - Array/list traversal (mask elements in arrays)
+    - Do NOT mutate the original object
+    - Default replacement value: "[REDACTED]"
+    - Support custom sensitive field lists
+    - Support custom replacement values
+    - Track masked fields in dt3.security.masked_fields if configured
+
+  configuration:
+    - sensitive_fields: list of field names to mask (case-insensitive)
+    - replacement_value: string to replace sensitive values with
+    - track_masked_fields: boolean, whether to record which fields were masked
+    - enabled: boolean, whether masking is active

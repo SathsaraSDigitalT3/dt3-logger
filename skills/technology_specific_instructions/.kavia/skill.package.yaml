@@ -1,0 +1,104 @@
+schema_version: kavia.skill_package.v1
+id: technology_specific_instructions
+name: technology_specific_instructions
+description: Instructions for writing code for various frameworks and technologies
+  covering Android, Android TV, Angular, Flutter, Kotlin, Lightning JS 3 / Blits,
+  MongoDB, MySQL, Playwright E2E, PostgreSQL, SQLite, and Slidev. Use this skill whenever
+  a task involves a specific framework, platform, database, package, runtime, or toolchain.
+version: 0.1.0
+source:
+  ecosystem: kavia-system
+  origin_uri: ''
+  imported_at: ''
+  adapter_version: ''
+  source_package_id: ''
+  source_package_version: ''
+  source_revision: ''
+  source_checksum: ''
+  update_channel: ''
+  last_checked_at: ''
+  latest_available_version: ''
+  latest_available_revision: ''
+instructions:
+  entrypoint: Skill.md
+  format: markdown
+  summary: ''
+files:
+- path: Skill.md
+  role: instructions
+  description: ''
+- path: instructions/android_app.md
+  role: instructions
+  description: ''
+- path: instructions/androidtv_app.md
+  role: instructions
+  description: ''
+- path: instructions/angular_app.md
+  role: instructions
+  description: ''
+- path: instructions/flutter_app.md
+  role: instructions
+  description: ''
+- path: instructions/kotlin_app.md
+  role: instructions
+  description: ''
+- path: instructions/lightning_app.md
+  role: instructions
+  description: ''
+- path: instructions/mongodb_app.md
+  role: instructions
+  description: ''
+- path: instructions/mysql_app.md
+  role: instructions
+  description: ''
+- path: instructions/playwright_e2e.md
+  role: instructions
+  description: ''
+- path: instructions/postgresql_app.md
+  role: instructions
+  description: ''
+- path: instructions/sqlite_app.md
+  role: instructions
+  description: ''
+- path: instructions/slidev_app.md
+  role: instructions
+  description: ''
+assets: []
+compatibility:
+  kavia_version_range: ''
+  external_format_version: ''
+  conversion_lossiness: none
+slash_command:
+  command: ''
+  aliases: []
+  enabled: false
+selection:
+  supported_agents: []
+  task_categories: []
+  trigger_phrases: []
+  exclusion_conditions: []
+  required_context_fields: []
+  conditional_context_key: ''
+  prompt_catalog_summary: ''
+  prompt_rendering_hints: []
+tools:
+  declared: []
+  permissions: []
+governance:
+  owner: system
+  visibility: system
+  state: enabled
+  reviewer: ''
+  reviewed_at: ''
+validation:
+  status: passed
+  report_path: .kavia/reports/validation_report.json
+update:
+  policy: manual_review
+  available: false
+  checked_at: ''
+  candidate_report_path: ''
+provenance:
+  created_at: '2026-07-09T05:14:50.932216+00:00'
+  updated_at: '2026-07-09T05:14:51.242128+00:00'
+  external_refs: []

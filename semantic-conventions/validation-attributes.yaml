@@ -1,0 +1,11 @@
+attributes:
+  - name: dt3.validation.errors
+    type: array
+    description: List of validation errors
+    required: false
+    source: DT3
+  - name: dt3.validation.mode
+    type: string
+    description: Validation mode (STRICT, LENIENT, OFF)
+    required: false
+    source: DT3

@@ -1,0 +1,21 @@
+attributes:
+  - name: event.name
+    type: string
+    description: Domain event name
+    required: true
+    source: OTel
+  - name: duration.ms
+    type: number
+    description: Duration in milliseconds
+    required: false
+    source: DT3
+  - name: user.id
+    type: string
+    description: ID of the user
+    required: false
+    source: OTel
+  - name: session.id
+    type: string
+    description: ID of the user session
+    required: false
+    source: OTel

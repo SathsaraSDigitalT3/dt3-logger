@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://digitalt3.com/schemas/error/1.0.0",
+  "title": "DT3 Commons Structured Error",
+  "description": "Structured error representation",
+  "type": "object",
+  "properties": {
+    "error_type": {
+      "type": "string",
+      "description": "Error class or type name"
+    },
+    "error_message": {
+      "type": "string",
+      "description": "Human-readable error message"
+    },
+    "error_stack": {
+      "type": "string",
+      "description": "Stack trace"
+    },
+    "error_code": {
+      "type": "string",
+      "description": "Application-specific error code"
+    },
+    "error_retryable": {
+      "type": "boolean",
+      "description": "Whether the operation can be retried"
+    }
+  }
+}

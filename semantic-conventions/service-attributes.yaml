@@ -1,0 +1,26 @@
+attributes:
+  - name: service.name
+    type: string
+    description: Logical name of the service
+    required: true
+    source: OTel
+  - name: service.version
+    type: string
+    description: Version of the service
+    required: true
+    source: OTel
+  - name: service.instance.id
+    type: string
+    description: ID of the service instance
+    required: false
+    source: OTel
+  - name: service.namespace
+    type: string
+    description: Namespace of the service
+    required: false
+    source: OTel
+  - name: deployment.environment
+    type: string
+    description: Deployment environment (e.g. dev, prod)
+    required: true
+    source: OTel

@@ -1,0 +1,31 @@
+spec:
+  name: errors
+  version: "1.0.0"
+  status: stable
+  description: >
+    Defines the error handling standard for DT3 Commons.
+    Errors are first-class structured data, not just strings.
+
+error_fields:
+  - name: error.type
+    type: string
+    description: Error class/type name
+  - name: error.message
+    type: string
+    description: Human-readable error message
+  - name: error.stack
+    type: string
+    description: Stack trace if available
+  - name: error.code
+    type: string
+    description: Application-specific error code
+  - name: error.retryable
+    type: boolean
+    description: Whether the operation can be retried
+
+principles:
+  - SDK errors must never crash the host application in fail-open mode
+  - All SDK internal errors should be caught and handled gracefully
+  - Error context should be structured, not string-concatenated
+  - Errors in the logging pipeline should be logged to stderr as last resort
+  - Error processor should enrich log events with structured error data

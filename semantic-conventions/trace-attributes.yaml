@@ -1,0 +1,21 @@
+attributes:
+  - name: trace.id
+    type: string
+    description: W3C trace-id
+    required: false
+    source: OTel
+  - name: span.id
+    type: string
+    description: W3C span-id
+    required: false
+    source: OTel
+  - name: parent.span.id
+    type: string
+    description: Parent span ID
+    required: false
+    source: OTel
+  - name: correlation.id
+    type: string
+    description: Business correlation ID
+    required: false
+    source: DT3

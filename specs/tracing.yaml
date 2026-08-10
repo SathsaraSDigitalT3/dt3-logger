@@ -1,0 +1,65 @@
+spec:
+  name: tracing
+  version: "1.0.0"
+  status: stable
+  description: >
+    Defines the distributed tracing context standard for DT3 Commons.
+    Aligned with W3C Trace Context and OpenTelemetry.
+
+trace_context:
+  fields:
+    - name: trace.id
+      type: string
+      format: 32 lowercase hex characters
+      description: W3C Trace Context trace-id
+      required: false
+    - name: span.id
+      type: string
+      format: 16 lowercase hex characters
+      description: W3C Trace Context parent-id (span)
+      required: false
+    - name: parent.span.id
+      type: string
+      format: 16 lowercase hex characters
+      description: Parent span identifier
+      required: false
+    - name: correlation.id
+      type: string
+      format: UUID v4
+      description: DT3 business-level correlation identifier
+      required: false
+
+propagation:
+  headers:
+    w3c:
+      - name: traceparent
+        format: "version-traceid-parentid-traceflags"
+        example: "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
+      - name: tracestate
+        format: vendor-specific key-value pairs
+    dt3:
+      - name: x-correlation-id
+        format: UUID v4
+        description: Business correlation across services
+
+  propagator_interface:
+    methods:
+      - name: inject
+        description: Inject trace context into outgoing carrier (headers)
+        parameters:
+          - name: context
+            type: TraceContext
+          - name: carrier
+            type: map<string, string>
+      - name: extract
+        description: Extract trace context from incoming carrier (headers)
+        parameters:
+          - name: carrier
+            type: map<string, string>
+        returns: TraceContext
+
+  rules:
+    - Handle missing headers safely (return empty context)
+    - Handle malformed headers safely (log warning, return empty context)
+    - Generate correlation ID if not present and auto_generate configured
+    - Never crash the application in fail-open mode

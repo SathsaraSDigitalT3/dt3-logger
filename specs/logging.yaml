@@ -1,0 +1,124 @@
+# DT3 Commons Platform SDK - Logging Specification
+# Version: 1.0.0
+# Status: Stable
+
+spec:
+  name: logging
+  version: "1.0.0"
+  status: stable
+  description: >
+    Defines the structured logging standard for all DT3 Commons SDK implementations.
+    All logs are structured events validated against a JSON Schema contract.
+
+principles:
+  - All log output must be structured (JSON/object), never unstructured strings
+  - Every log entry is a LogEvent conforming to schemas/log-event.schema.json
+  - Logging must fail-open by default — errors in logging must not crash the application
+  - Masking is applied before export by default
+  - Validation mode is configurable (STRICT, LENIENT, OFF)
+  - Exporters are pluggable — the logger does not know the destination
+  - OpenTelemetry-compatible attribute names are preferred
+
+severity_levels:
+  - name: DEBUG
+    numeric: 5
+    description: Fine-grained debugging information
+  - name: INFO
+    numeric: 9
+    description: Normal operational events
+  - name: WARN
+    numeric: 13
+    description: Potentially harmful situations
+  - name: ERROR
+    numeric: 17
+    description: Error events that allow continued operation
+  - name: FATAL
+    numeric: 21
+    description: Severe errors causing premature termination
+
+logger_interface:
+  methods:
+    - name: debug
+      parameters:
+        - name: message
+          type: string
+          required: true
+        - name: context
+          type: map<string, any>
+          required: false
+    - name: info
+      parameters:
+        - name: message
+          type: string
+          required: true
+        - name: context
+          type: map<string, any>
+          required: false
+    - name: warn
+      parameters:
+        - name: message
+          type: string
+          required: true
+        - name: context
+          type: map<string, any>
+          required: false
+    - name: error
+      parameters:
+        - name: message
+          type: string
+          required: true
+        - name: error
+          type: error_object
+          required: false
+        - name: context
+          type: map<string, any>
+          required: false
+    - name: event
+      parameters:
+        - name: event_object
+          type: LogEvent
+          required: true
+    - name: startTimer
+      parameters:
+        - name: event_name
+          type: string
+          required: true
+        - name: context
+          type: map<string, any>
+          required: false
+      returns: Timer
+    - name: flush
+      description: Flush all pending log events to exporters
+
+pipeline:
+  description: >
+    Every log event flows through the processing pipeline before export.
+  stages:
+    - name: EventFactory
+      description: Creates a structured LogEvent from logger method call
+    - name: EnrichmentProcessor
+      description: Adds service metadata, trace context, tenant context, timestamps
+    - name: MaskingProcessor
+      description: Applies recursive sensitive-data masking
+    - name: ValidationProcessor
+      description: Validates event against JSON Schema
+    - name: BatchingProcessor
+      description: Batches events for efficient export
+    - name: Exporter
+      description: Writes events to configured destination
+
+event_naming:
+  convention: UPPER_SNAKE_CASE
+  examples:
+    - USER_LOGIN_COMPLETED
+    - ORDER_CREATED
+    - PAYMENT_PROCESSED
+    - OUTGOING_HTTP
+    - INCOMING_HTTP
+    - WORKER_JOB_STARTED
+    - WORKER_JOB_COMPLETED
+  rules:
+    - event.name is required on every log event
+    - Names should be descriptive and action-oriented
+    - Use domain prefix for business events (e.g., ORDER_CREATED)
+    - Use technical prefix for infrastructure events (e.g., OUTGOING_HTTP)

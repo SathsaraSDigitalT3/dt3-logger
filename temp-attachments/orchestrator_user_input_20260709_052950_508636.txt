@@ -1,0 +1,78 @@
+PS C:\Users\saths> ssh -i "C:\Users\saths\Downloads\Backend-Metro-Insta-pem-key.pem" -L 3307:detections-dev.cx4oik8kkir6.us-east-2.rds.amazonaws.com:3306 ec2-user@3.143.147.170
+
+A newer release of "Amazon Linux" is available.
+  Version 2023.10.20260105:
+  Version 2023.10.20260120:
+  Version 2023.10.20260202:
+  Version 2023.10.20260216:
+  Version 2023.10.20260302:
+  Version 2023.10.20260325:
+  Version 2023.10.20260330:
+  Version 2023.11.20260406:
+  Version 2023.11.20260413:
+  Version 2023.11.20260427:
+  Version 2023.11.20260505:
+  Version 2023.11.20260509:
+  Version 2023.11.20260511:
+  Version 2023.11.20260514:
+  Version 2023.11.20260526:
+  Version 2023.12.20260608:
+  Version 2023.12.20260611:
+  Version 2023.12.20260622:
+  Version 2023.12.20260629:
+  Version 2023.12.20260706:
+  Version 2023.9.20251027:
+  Version 2023.9.20251105:
+  Version 2023.9.20251110:
+  Version 2023.9.20251117:
+  Version 2023.9.20251208:
+Run "/usr/bin/dnf check-release-update" for full release and version update info
+   ,     #_
+   ~\_  ####_        Amazon Linux 2023
+  ~~  \_#####\
+  ~~     \###|
+  ~~       \#/ ___   https://aws.amazon.com/linux/amazon-linux-2023
+   ~~       V~' '->
+    ~~~         /
+      ~~._.   _/
+         _/ _/
+       _/m/'
+Last login: Wed Jul  8 09:02:04 2026 from 37.19.199.152
+[ec2-user@ip-172-31-20-192 ~]$ mysql -h detections-pre-prod.cx4oik8kkir6.us-east-2.rds.amazonaws.com -P 3306 -u labelimg_dbadmin -p detections_org01_staging
+Enter password:
+Reading table information for completion of table and column names
+You can turn off this feature to get a quicker startup with -A
+
+Welcome to the MySQL monitor.  Commands end with ; or \g.
+Your MySQL connection id is 6891
+Server version: 11.4.9-MariaDB-log managed by https://aws.amazon.com/rds/
+
+Copyright (c) 2000, 2025, Oracle and/or its affiliates.
+
+Oracle is a registered trademark of Oracle Corporation and/or its
+affiliates. Other names may be trademarks of their respective
+owners.
+
+Type 'help;' or '\h' for help. Type '\c' to clear the current input statement.
+
+mysql> show databases;
++----------------------------+
+| Database                   |
++----------------------------+
+| bear_stats                 |
+| detections_org01_staging   |
+| detectionsv1_org01_staging |
+| information_schema         |
+| innodb                     |
+| mydatabase                 |
+| mysql                      |
+| performance_schema         |
+| sys                        |
+| tmp                        |
++----------------------------+
+10 rows in set (0.00 sec)
+
+mysql> use detections_org01_staging;
+Database changed
+
+Can you loginto the database and check whether Randhir was spotted yesterday?

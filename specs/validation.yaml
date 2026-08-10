@@ -1,0 +1,45 @@
+spec:
+  name: validation
+  version: "1.0.0"
+  status: stable
+  description: >
+    Defines the schema validation standard for DT3 Commons.
+    All log events can be validated against the canonical JSON Schema.
+
+modes:
+  - name: STRICT
+    description: Invalid events throw/raise validation errors
+    use_cases:
+      - Tests
+      - CI/CD pipelines
+      - Contract enforcement
+    behavior: Raise ValidationError on invalid event
+
+  - name: LENIENT
+    description: Invalid events continue with validation error details attached
+    use_cases:
+      - Development
+      - Staging
+      - Default mode
+    behavior: >
+      Attach validation errors to dt3.validation.errors field.
+      Do not raise exceptions. Continue processing.
+
+  - name: "OFF"
+    description: Skip validation completely
+    use_cases:
+      - High-performance production environments
+      - When schema validation overhead is unacceptable
+    behavior: Skip all validation checks
+
+defaults:
+  validation_mode: LENIENT
+  fail_open: true
+
+validator_interface:
+  methods:
+    - name: validate
+      parameters:
+        - name: event
+          type: LogEvent
+      returns: ValidationResult

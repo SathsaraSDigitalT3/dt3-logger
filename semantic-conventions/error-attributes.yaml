@@ -1,0 +1,26 @@
+attributes:
+  - name: error.type
+    type: string
+    description: Error class
+    required: false
+    source: OTel
+  - name: error.message
+    type: string
+    description: Error message
+    required: false
+    source: OTel
+  - name: error.stack
+    type: string
+    description: Stack trace
+    required: false
+    source: OTel
+  - name: error.code
+    type: string
+    description: App specific error code
+    required: false
+    source: DT3
+  - name: error.retryable
+    type: boolean
+    description: Is retryable
+    required: false
+    source: DT3

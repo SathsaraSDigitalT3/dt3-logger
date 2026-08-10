@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://digitalt3.com/schemas/tenant-context/1.0.0",
+  "title": "DT3 Commons Tenant Context",
+  "description": "Multi-tenant context structure",
+  "type": "object",
+  "required": ["tenant_id"],
+  "properties": {
+    "tenant_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Unique tenant identifier"
+    },
+    "tenant_region": {
+      "type": "string",
+      "description": "Tenant deployment region"
+    },
+    "tenant_environment": {
+      "type": "string",
+      "description": "Tenant environment"
+    }
+  }
+}

@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://digitalt3.com/schemas/validation-result/1.0.0",
+  "title": "DT3 Commons Validation Result",
+  "description": "Result of schema validation",
+  "type": "object",
+  "required": ["valid"],
+  "properties": {
+    "valid": {
+      "type": "boolean",
+      "description": "Whether the validated object is valid"
+    },
+    "errors": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "field": { "type": "string" },
+          "message": { "type": "string" },
+          "rule": { "type": "string" }
+        }
+      },
+      "description": "List of validation errors"
+    },
+    "mode": {
+      "type": "string",
+      "enum": ["STRICT", "LENIENT", "OFF"],
+      "description": "Validation mode used"
+    }
+  }
+}

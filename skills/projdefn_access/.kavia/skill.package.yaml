@@ -1,0 +1,78 @@
+schema_version: kavia.skill_package.v1
+id: projdefn_access
+name: projdefn_access {value}
+description: ''
+version: 0.1.0
+source:
+  ecosystem: kavia-system
+  origin_uri: CodeGenerationAgent/src/code_generation_core_agent/agents/micro/prompts/skills/conditional/projdefn_access.meta.yaml
+  imported_at: ''
+  adapter_version: ''
+  source_package_id: projdefn_access
+  source_package_version: ''
+  source_revision: ''
+  source_checksum: ''
+  update_channel: ''
+  last_checked_at: ''
+  latest_available_version: ''
+  latest_available_revision: ''
+instructions:
+  entrypoint: Skill.md
+  format: markdown
+  summary: Use ProjDefnTools when work may depend on ingested project definition,
+    specification, scheduling, planning, document chunk, or document image data.
+files:
+- path: Skill.md
+  role: instructions
+  description: Canonical conditional package instruction entrypoint.
+assets: []
+compatibility:
+  kavia_version_range: ''
+  external_format_version: ''
+  conversion_lossiness: none
+slash_command:
+  command: projdefn
+  aliases: []
+  enabled: true
+selection:
+  supported_agents: []
+  task_categories: []
+  trigger_phrases:
+  - project definition
+  - ingested specification document
+  - planning document
+  - document chunk lookup
+  exclusion_conditions: []
+  required_context_fields: []
+  conditional_context_key: have_projdefn
+  prompt_catalog_summary: Access ingested project definition data and related document
+    chunks/images when specification or planning context may be required and runtime
+    value is {value}.
+  prompt_rendering_hints:
+  - Render when skills_context.have_projdefn is present.
+  - Preserve {value} as the projdefn availability placeholder for scalar runtime context
+    values.
+tools:
+  declared:
+  - ProjdefnTools
+  permissions: []
+governance:
+  owner: system
+  visibility: system
+  state: enabled
+  reviewer: system
+  reviewed_at: ''
+validation:
+  status: passed
+  report_path: .kavia/reports/validation_report.json
+update:
+  policy: manual_review
+  available: false
+  checked_at: ''
+  candidate_report_path: ''
+provenance:
+  created_at: '2026-07-09T05:14:49.500117+00:00'
+  updated_at: '2026-07-09T05:14:49.757858+00:00'
+  external_refs:
+  - CodeGenerationAgent/src/code_generation_core_agent/agents/micro/prompts/skills/conditional/projdefn_access.meta.yaml
+  - CodeGenerationAgent/src/code_generation_core_agent/agents/micro/prompts/skills/conditional/projdefn_access.txt

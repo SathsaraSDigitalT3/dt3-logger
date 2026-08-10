@@ -1,0 +1,16 @@
+[project]
+name = "digitalt3-commons"
+version = "0.1.0"
+description = "DT3 Commons Platform SDK - Monorepo root"
+requires-python = ">=3.10"
+
+[tool.ruff]
+target-version = "py310"
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W"]
+
+[tool.pytest.ini_options]
+testpaths = ["packages/python/tests"]
+pythonpath = ["packages/python"]

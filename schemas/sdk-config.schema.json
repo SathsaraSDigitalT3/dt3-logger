@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://digitalt3.com/schemas/sdk-config/1.0.0",
+  "title": "DT3 Commons SDK Configuration",
+  "description": "SDK configuration schema",
+  "type": "object",
+  "required": ["service.name", "service.version", "deployment.environment"],
+  "properties": {
+    "service.name": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Name of the service"
+    },
+    "service.version": {
+      "type": "string",
+      "description": "Version of the service"
+    },
+    "deployment.environment": {
+      "type": "string",
+      "description": "Deployment environment"
+    },
+    "schema.version": {
+      "type": "string",
+      "default": "1.0.0"
+    },
+    "sdk.name": { "type": "string" },
+    "sdk.version": { "type": "string" },
+    "validation.mode": {
+      "type": "string",
+      "enum": ["STRICT", "LENIENT", "OFF"],
+      "default": "LENIENT"
+    },
+    "fail_open": {
+      "type": "boolean",
+      "default": true
+    },
+    "exporter": {
+      "type": "string",
+      "enum": ["stdout", "file", "http", "otlp"],
+      "default": "stdout"
+    },
+    "exporter.file.path": { "type": "string" },
+    "exporter.http.endpoint": { "type": "string" },
+    "exporter.http.timeout_ms": { "type": "integer", "default": 5000 },
+    "masking.enabled": { "type": "boolean", "default": true },
+    "masking.fields": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "batching.enabled": { "type": "boolean", "default": false },
+    "batching.max_size": { "type": "integer", "default": 100 },
+    "batching.flush_interval_ms": { "type": "integer", "default": 5000 }
+  }
+}

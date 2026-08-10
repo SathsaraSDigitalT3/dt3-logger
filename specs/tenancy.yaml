@@ -1,0 +1,52 @@
+spec:
+  name: tenancy
+  version: "1.0.0"
+  status: stable
+  description: >
+    Defines the multi-tenancy context standard for DT3 Commons.
+    Tenant context is a first-class concept that flows through all platform components.
+
+tenant_context:
+  fields:
+    - name: tenant.id
+      type: string
+      description: Unique tenant identifier
+      required: true
+    - name: tenant.region
+      type: string
+      description: Tenant's deployment region
+      required: false
+    - name: tenant.environment
+      type: string
+      description: Tenant's environment (production, staging, dev)
+      required: false
+
+propagation:
+  headers:
+    - name: x-tenant-id
+      maps_to: tenant.id
+    - name: x-tenant-region
+      maps_to: tenant.region
+    - name: x-tenant-environment
+      maps_to: tenant.environment
+
+  flow:
+    - logs
+    - traces
+    - events
+    - API requests
+    - queues
+    - workers
+    - background jobs
+    - service-to-service calls
+    - configuration lookups
+    - security checks
+    - compliance checks
+
+  rules:
+    - Tenant context must be extractable from HTTP headers
+    - Tenant context must be injectable into outgoing HTTP headers
+    - Tenant context must be propagable through message queues
+    - Tenant context must appear in all log events when present
+    - Missing tenant context should not crash the application
+    - Tenant isolation must be enforced at the application layer

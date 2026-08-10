@@ -1,0 +1,16 @@
+attributes:
+  - name: tenant.id
+    type: string
+    description: Unique tenant ID
+    required: true
+    source: DT3
+  - name: tenant.region
+    type: string
+    description: Tenant region
+    required: false
+    source: DT3
+  - name: tenant.environment
+    type: string
+    description: Tenant environment
+    required: false
+    source: DT3

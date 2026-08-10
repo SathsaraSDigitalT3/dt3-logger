@@ -1,0 +1,76 @@
+schema_version: kavia.skill_package.v1
+id: kdiff_query
+name: kdiff-{value}
+description: ''
+version: 0.1.0
+source:
+  ecosystem: kavia-system
+  origin_uri: CodeGenerationAgent/src/code_generation_core_agent/agents/micro/prompts/skills/conditional/kdiff_query.meta.yaml
+  imported_at: ''
+  adapter_version: ''
+  source_package_id: kdiff_query
+  source_package_version: ''
+  source_revision: ''
+  source_checksum: ''
+  update_channel: ''
+  last_checked_at: ''
+  latest_available_version: ''
+  latest_available_revision: ''
+instructions:
+  entrypoint: Skill.md
+  format: markdown
+  summary: Use KDiffQueryTools_kdiff_query with kdiff name {value} when detailed questions
+    about baseline/new code differences would help the task.
+files:
+- path: Skill.md
+  role: instructions
+  description: Canonical conditional package instruction entrypoint.
+assets: []
+compatibility:
+  kavia_version_range: ''
+  external_format_version: ''
+  conversion_lossiness: none
+slash_command:
+  command: kdiff-query
+  aliases: []
+  enabled: true
+selection:
+  supported_agents: []
+  task_categories: []
+  trigger_phrases:
+  - kdiff query
+  - codebase difference analysis
+  - baseline and new code comparison
+  exclusion_conditions: []
+  required_context_fields: []
+  conditional_context_key: kdiffs
+  prompt_catalog_summary: Query the kdiff named {name} for detailed information about
+    differences between baseline and new codebases.
+  prompt_rendering_hints:
+  - Render once for each item in skills_context.kdiffs.
+  - Preserve {value} as the kdiff identifier placeholder for dict or scalar context
+    values.
+tools:
+  declared:
+  - KDiffQueryTools
+  permissions: []
+governance:
+  owner: system
+  visibility: system
+  state: enabled
+  reviewer: system
+  reviewed_at: ''
+validation:
+  status: passed
+  report_path: .kavia/reports/validation_report.json
+update:
+  policy: manual_review
+  available: false
+  checked_at: ''
+  candidate_report_path: ''
+provenance:
+  created_at: '2026-07-09T05:14:43.689509+00:00'
+  updated_at: '2026-07-09T05:14:43.970213+00:00'
+  external_refs:
+  - CodeGenerationAgent/src/code_generation_core_agent/agents/micro/prompts/skills/conditional/kdiff_query.meta.yaml
+  - CodeGenerationAgent/src/code_generation_core_agent/agents/micro/prompts/skills/conditional/kdiff_query.txt
