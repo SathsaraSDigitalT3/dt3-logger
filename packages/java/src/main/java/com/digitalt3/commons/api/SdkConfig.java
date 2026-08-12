@@ -1,5 +1,8 @@
 package com.digitalt3.commons.api;
 
+import java.util.ArrayList;
+import java.util.List;
+
 /**
  * SDK configuration.
  *
@@ -16,14 +19,18 @@ public class SdkConfig {
     private boolean failOpen = true;
     private String exporter = "stdout";
     private boolean maskingEnabled = true;
+    private List<String> maskingFields = new ArrayList<>();
+    private String maskingReplacementValue = "[REDACTED]";
+    private boolean maskingTrackMaskedFields;
 
-    // Getters and setters for all fields
     public String getServiceName() { return serviceName; }
     public void setServiceName(String serviceName) { this.serviceName = serviceName; }
     public String getServiceVersion() { return serviceVersion; }
     public void setServiceVersion(String serviceVersion) { this.serviceVersion = serviceVersion; }
     public String getDeploymentEnvironment() { return deploymentEnvironment; }
-    public void setDeploymentEnvironment(String deploymentEnvironment) { this.deploymentEnvironment = deploymentEnvironment; }
+    public void setDeploymentEnvironment(String deploymentEnvironment) {
+        this.deploymentEnvironment = deploymentEnvironment;
+    }
     public String getSchemaVersion() { return schemaVersion; }
     public void setSchemaVersion(String schemaVersion) { this.schemaVersion = schemaVersion; }
     public String getSdkName() { return sdkName; }
@@ -38,4 +45,59 @@ public class SdkConfig {
     public void setExporter(String exporter) { this.exporter = exporter; }
     public boolean isMaskingEnabled() { return maskingEnabled; }
     public void setMaskingEnabled(boolean maskingEnabled) { this.maskingEnabled = maskingEnabled; }
+
+    /**
+     * Return additional sensitive field names supplied by the application.
+     *
+     * @return a defensive copy of configured sensitive field names
+     */
+    public List<String> getMaskingFields() {
+        return List.copyOf(maskingFields);
+    }
+
+    /**
+     * Configure additional field names that must be redacted case-insensitively.
+     *
+     * @param maskingFields caller-defined sensitive field names
+     */
+    public void setMaskingFields(List<String> maskingFields) {
+        this.maskingFields = maskingFields == null ? new ArrayList<>() : new ArrayList<>(maskingFields);
+    }
+
+    /**
+     * Return the replacement used for masked values.
+     *
+     * @return the configured replacement value
+     */
+    public String getMaskingReplacementValue() {
+        return maskingReplacementValue;
+    }
+
+    /**
+     * Configure the replacement used for masked values.
+     *
+     * @param maskingReplacementValue replacement text, defaulting to {@code [REDACTED]} when null
+     */
+    public void setMaskingReplacementValue(String maskingReplacementValue) {
+        this.maskingReplacementValue =
+            maskingReplacementValue == null ? "[REDACTED]" : maskingReplacementValue;
+    }
+
+    /**
+     * Return whether masked field paths should be added to emitted events.
+     *
+     * @return {@code true} when masked paths should be tracked
+     */
+    public boolean isMaskingTrackMaskedFields() {
+        return maskingTrackMaskedFields;
+    }
+
+    /**
+     * Configure whether masked field paths should be tracked.
+     *
+     * @param maskingTrackMaskedFields whether to emit redacted field paths
+     */
+    public void setMaskingTrackMaskedFields(boolean maskingTrackMaskedFields) {
+        this.maskingTrackMaskedFields = maskingTrackMaskedFields;
+    }
 }
