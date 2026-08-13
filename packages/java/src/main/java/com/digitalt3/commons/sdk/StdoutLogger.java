@@ -3,6 +3,7 @@ package com.digitalt3.commons.sdk;
 import com.digitalt3.commons.api.Logger;
 import com.digitalt3.commons.api.SdkConfig;
 import com.digitalt3.commons.api.ValidationMode;
+import com.digitalt3.commons.api.Validator;
 
 import java.io.PrintWriter;
 import java.io.StringWriter;
@@ -120,13 +121,22 @@ public final class StdoutLogger implements Logger {
                 maskedEvent.put("dt3.security.masked_fields", maskedFields);
             }
 
-            List<String> validationErrors = eventValidator.apply(
+            List<Validator.ValidationErrorDetail> validationErrors = eventValidator.apply(
                 maskedEvent,
                 validationMode
             );
             if (!validationErrors.isEmpty() && validationMode == ValidationMode.LENIENT) {
                 redactInvalidValues(maskedEvent, validationErrors);
-                maskedEvent.put("dt3.validation.errors", validationErrors);
+                maskedEvent.put(
+                    "dt3.validation.errors",
+                    validationErrors.stream()
+                        .map(errorDetail -> Map.of(
+                            "field", errorDetail.field(),
+                            "message", errorDetail.message(),
+                            "rule", errorDetail.rule()
+                        ))
+                        .toList()
+                );
             }
 
             System.out.println(toJson(maskedEvent));
@@ -149,15 +159,16 @@ public final class StdoutLogger implements Logger {
      * @param event event that will be serialized
      * @param validationErrors sanitized schema diagnostics
      */
-    private void redactInvalidValues(Map<String, Object> event, List<String> validationErrors) {
-        String diagnosticPrefix = "Value has an invalid type at /";
-        for (String validationError : validationErrors) {
-            if (!validationError.startsWith(diagnosticPrefix)) {
+    private void redactInvalidValues(
+        Map<String, Object> event,
+        List<Validator.ValidationErrorDetail> validationErrors
+    ) {
+        for (Validator.ValidationErrorDetail validationError : validationErrors) {
+            if (!"type".equals(validationError.rule())) {
                 continue;
             }
 
-            String encodedField = validationError.substring(diagnosticPrefix.length());
-            String field = encodedField.replace("~1", "/").replace("~0", "~");
+            String field = validationError.field();
             if (event.containsKey(field)) {
                 event.put(field, "[REDACTED]");
             }

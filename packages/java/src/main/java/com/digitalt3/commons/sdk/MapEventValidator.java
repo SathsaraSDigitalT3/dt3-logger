@@ -1,6 +1,7 @@
 package com.digitalt3.commons.sdk;
 
 import com.digitalt3.commons.api.ValidationMode;
+import com.digitalt3.commons.api.Validator.ValidationErrorDetail;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.networknt.schema.JsonSchema;
@@ -16,11 +17,12 @@ import java.util.Objects;
 import java.util.Set;
 
 /**
- * Internal validator for the map-based events emitted by {@link StdoutLogger}.
+ * Internal validator for map-based events emitted by {@link StdoutLogger}.
  *
  * <p>The validator evaluates the packaged canonical {@code log-event.schema.json}
- * document, preserving validation of the exact flat event map sent to stdout
- * without changing the public {@code Logger} API.</p>
+ * document and translates schema diagnostics into sanitized structured details.
+ * The same map validation path is reused by the public {@link LogEventValidator}
+ * adapter without changing the logger's flat-map architecture.</p>
  *
  * @since 0.1.0
  */
@@ -34,15 +36,15 @@ final class MapEventValidator {
      * Validate an event against the complete canonical log-event JSON Schema.
      *
      * @param event flat dot-keyed event map
-     * @return sanitized validation diagnostics, or an empty list for a valid event
+     * @return sanitized structured diagnostics, or an empty list for a valid event
      */
-    List<String> validate(Map<String, Object> event) {
+    List<ValidationErrorDetail> validate(Map<String, Object> event) {
         JsonNode eventNode = OBJECT_MAPPER.valueToTree(event);
         Set<ValidationMessage> validationMessages = CANONICAL_SCHEMA.schema().validate(eventNode);
 
-        List<String> errors = new ArrayList<>(validationMessages.size());
+        List<ValidationErrorDetail> errors = new ArrayList<>(validationMessages.size());
         for (ValidationMessage validationMessage : validationMessages) {
-            errors.add(sanitize(validationMessage, event));
+            errors.add(toDetail(validationMessage, event));
         }
         return List.copyOf(errors);
     }
@@ -55,7 +57,7 @@ final class MapEventValidator {
      * @return validation diagnostics for LENIENT export
      * @throws IllegalArgumentException if no mode is configured or STRICT validation fails
      */
-    List<String> apply(Map<String, Object> event, ValidationMode mode) {
+    List<ValidationErrorDetail> apply(Map<String, Object> event, ValidationMode mode) {
         ValidationMode resolvedMode = Objects.requireNonNull(
             mode,
             "validationMode must be STRICT, LENIENT, or OFF"
@@ -65,14 +67,28 @@ final class MapEventValidator {
             return List.of();
         }
 
-        List<String> errors = validate(event);
+        List<ValidationErrorDetail> errors = validate(event);
         if (errors.isEmpty() || resolvedMode == ValidationMode.LENIENT) {
             return errors;
         }
 
         throw new IllegalArgumentException(
-            "Log event validation failed: " + String.join("; ", errors)
+            "Log event validation failed: " + formatErrors(errors)
         );
+    }
+
+    /**
+     * Render structured diagnostics for a sanitized exception message.
+     *
+     * @param errors structured validation details
+     * @return readable diagnostics without rejected caller values
+     */
+    static String formatErrors(List<ValidationErrorDetail> errors) {
+        List<String> messages = new ArrayList<>(errors.size());
+        for (ValidationErrorDetail error : errors) {
+            messages.add(error.message() + " at " + error.field());
+        }
+        return String.join("; ", messages);
     }
 
     private static CanonicalSchema loadCanonicalSchema() {
@@ -110,34 +126,35 @@ final class MapEventValidator {
         return List.copyOf(requiredProperties);
     }
 
-    private String sanitize(ValidationMessage validationMessage, Map<String, Object> event) {
-        String instanceLocation = diagnosticLocation(validationMessage);
-        String validationCategory = validationMessage.getType();
+    private ValidationErrorDetail toDetail(
+        ValidationMessage validationMessage,
+        Map<String, Object> event
+    ) {
+        String rule = validationMessage.getType();
+        String field = diagnosticField(validationMessage, event);
 
-        if ("required".equals(validationCategory)) {
-            return "Required property is missing: " + requiredProperty(event)
-                + " at " + instanceLocation;
-        }
-        if ("type".equals(validationCategory)) {
-            return "Value has an invalid type at " + instanceLocation;
-        }
-        if ("format".equals(validationCategory)) {
-            return "Value has an invalid format at " + instanceLocation;
-        }
-        if ("pattern".equals(validationCategory)) {
-            return "Value has an invalid pattern at " + instanceLocation;
-        }
-        if ("enum".equals(validationCategory)) {
-            return "Value is not an allowed value at " + instanceLocation;
-        }
-        if ("minLength".equals(validationCategory)) {
-            return "Value is shorter than the minimum length at " + instanceLocation;
-        }
-        if ("minimum".equals(validationCategory)) {
-            return "Value is below the minimum at " + instanceLocation;
+        if ("required".equals(rule)) {
+            field = requiredProperty(event);
+            return new ValidationErrorDetail(
+                field,
+                "Required property is missing",
+                rule
+            );
         }
 
-        return "Schema validation failed at " + instanceLocation;
+        return new ValidationErrorDetail(field, messageForRule(rule), rule);
+    }
+
+    private String messageForRule(String rule) {
+        return switch (rule) {
+            case "type" -> "Value has an invalid type";
+            case "format" -> "Value has an invalid format";
+            case "pattern" -> "Value has an invalid pattern";
+            case "enum" -> "Value is not an allowed value";
+            case "minLength" -> "Value is shorter than the minimum length";
+            case "minimum" -> "Value is below the minimum";
+            default -> "Schema validation failed";
+        };
     }
 
     /**
@@ -157,23 +174,24 @@ final class MapEventValidator {
                 return requiredProperty;
             }
         }
-        return "property";
+        return "$";
     }
 
     /**
-     * Resolve a stable JSON Pointer for a validation failure.
+     * Resolve a stable dot-keyed field for a validation failure.
      *
-     * <p>NetworkNT 1.5.9 reports flat dotted event keys through the schema
-     * location for property-level constraints. Its instance location can
-     * instead point at the root object, so prefer the field identified after
-     * the schema {@code properties} segment. Required-property failures have
-     * no property subschema and correctly retain the validator's root
-     * location.</p>
+     * <p>NetworkNT reports flat dotted event keys through the schema location for
+     * property-level constraints. Its instance location can instead point at the
+     * root object, so the schema property segment is preferred whenever present.</p>
      *
      * @param validationMessage schema validation failure
-     * @return a structural JSON Pointer that never includes the rejected value
+     * @param event final flat event map used to validate instance-location fallbacks
+     * @return the affected flat event field, or {@code $} for a root failure
      */
-    private String diagnosticLocation(ValidationMessage validationMessage) {
+    private String diagnosticField(
+        ValidationMessage validationMessage,
+        Map<String, Object> event
+    ) {
         String schemaLocation = validationMessage.getSchemaLocation().toString();
         String propertyMarker = "/properties/";
         int propertyIndex = schemaLocation.lastIndexOf(propertyMarker);
@@ -186,22 +204,31 @@ final class MapEventValidator {
                 : propertyPath;
 
             if (!schemaProperty.isEmpty()) {
-                return "/" + decodeSchemaProperty(schemaProperty)
-                    .replace("~", "~0")
-                    .replace("/", "~1");
+                return decodeSchemaProperty(schemaProperty);
             }
         }
 
-        return validationMessage.getInstanceLocation().toString();
+        String instanceLocation = validationMessage.getInstanceLocation().toString();
+        if (instanceLocation == null || instanceLocation.isEmpty() || "/".equals(instanceLocation)) {
+            return "$";
+        }
+
+        String instanceField = decodeInstanceLocation(instanceLocation);
+        return event.containsKey(instanceField) ? instanceField : "$";
+    }
+
+    private String decodeInstanceLocation(String instanceLocation) {
+        String trimmedLocation = instanceLocation.startsWith("/")
+            ? instanceLocation.substring(1)
+            : instanceLocation;
+
+        return trimmedLocation
+            .replace("~1", "/")
+            .replace("~0", "~");
     }
 
     /**
-     * Decode the JSON Pointer escaping used in a schema-location property segment.
-     *
-     * <p>Schema locations encode literal slash and tilde characters in property
-     * names. The returned value is re-encoded as an instance JSON Pointer by
-     * {@link #diagnosticLocation(ValidationMessage)} so the diagnostic references
-     * the event's literal flat map key.</p>
+     * Decode JSON Pointer escaping used in a schema-location property segment.
      *
      * @param schemaProperty property segment extracted from a schema location
      * @return the literal event-map property name

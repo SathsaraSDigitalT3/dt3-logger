@@ -84,10 +84,18 @@ class LoggerImpl:
             if validation_result.mode == "STRICT":
                 raise ValidationError(
                     "Log event failed schema validation: "
-                    + "; ".join(validation_result.errors)
+                    + "; ".join(
+                        (
+                            f"{detail.field}: {detail.message} "
+                            f"(rule: {detail.rule})"
+                        )
+                        for detail in validation_result.errors
+                    )
                 )
             if validation_result.mode == "LENIENT":
-                masked_event["dt3.validation.errors"] = validation_result.errors
+                masked_event["dt3.validation.errors"] = [
+                    detail.to_dict() for detail in validation_result.errors
+                ]
 
         # Preserve existing exporter behavior: stdout is the only implemented exporter.
         if self.exporter == "stdout":

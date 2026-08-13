@@ -5,6 +5,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.LogEventValidator = exports.ValidationError = void 0;
 const _2020_1 = __importDefault(require("ajv/dist/2020"));
+const ajv_formats_1 = __importDefault(require("ajv-formats"));
 const types_1 = require("../api/types");
 /**
  * Raised when a log event fails canonical schema validation in STRICT mode.
@@ -16,8 +17,11 @@ class ValidationError extends Error {
      * @param errors - Schema-rule errors that do not contain caller-supplied values.
      */
     constructor(errors) {
-        super(`Log event failed schema validation: ${errors.join('; ')}`);
+        super(`Log event failed schema validation: ${ValidationError.formatErrors(errors)}`);
         this.name = 'ValidationError';
+    }
+    static formatErrors(errors) {
+        return errors.map(({ field, message, rule }) => `${field}: ${message} (${rule})`).join('; ');
     }
 }
 exports.ValidationError = ValidationError;
@@ -70,7 +74,17 @@ const LOG_EVENT_SCHEMA = {
         'error.code': { type: 'string' },
         'error.retryable': { type: 'boolean' },
         attributes: { type: 'object', additionalProperties: true },
-        'dt3.validation.errors': { type: 'array', items: { type: 'string' } },
+        'dt3.validation.errors': {
+            type: 'array',
+            items: {
+                type: 'object',
+                properties: {
+                    field: { type: 'string' },
+                    message: { type: 'string' },
+                    rule: { type: 'string' },
+                },
+            },
+        },
         'dt3.security.masked_fields': { type: 'array', items: { type: 'string' } },
     },
     additionalProperties: true,
@@ -86,7 +100,8 @@ class LogEventValidator {
     constructor() {
         // The repository's canonical schema explicitly targets JSON Schema Draft
         // 2020-12, so use Ajv's matching dialect-specific entry point.
-        const ajv = new _2020_1.default({ allErrors: true, strict: false, validateFormats: false });
+        const ajv = new _2020_1.default({ allErrors: true, strict: false });
+        (0, ajv_formats_1.default)(ajv);
         this.validator = ajv.compile(LOG_EVENT_SCHEMA);
     }
     // PUBLIC_INTERFACE
@@ -95,7 +110,7 @@ class LogEventValidator {
      *
      * @param event - Structured log event to validate.
      * @param mode - Repository-defined validation mode.
-     * @returns The validation outcome with sanitized schema-rule error messages.
+     * @returns The validation outcome with structured, sanitized schema-rule diagnostics.
      * @throws Error if the validation mode is not repository-defined.
      */
     validate(event, mode = types_1.ValidationMode.LENIENT) {
@@ -120,10 +135,38 @@ class LogEventValidator {
     formatError(error) {
         if (error.keyword === 'required') {
             const missingProperty = error.params.missingProperty ?? 'unknown';
-            return `required property is missing (${missingProperty})`;
+            return {
+                field: missingProperty,
+                message: 'Required property is missing.',
+                rule: 'required',
+            };
         }
-        const field = error.instancePath ? error.instancePath.slice(1).replace(/\//g, '.') : '$';
-        return `${field}: violates schema rule '${error.keyword}'`;
+        return {
+            field: this.toFieldPath(error.instancePath),
+            message: this.messageForRule(error.keyword),
+            rule: error.keyword,
+        };
+    }
+    toFieldPath(instancePath) {
+        if (!instancePath) {
+            return '$';
+        }
+        return instancePath
+            .slice(1)
+            .split('/')
+            .map((segment) => segment.replace(/~1/g, '/').replace(/~0/g, '~'))
+            .join('.');
+    }
+    messageForRule(rule) {
+        const messages = {
+            enum: 'Value must be one of the allowed options.',
+            format: 'Value does not match the required format.',
+            minLength: 'Value is shorter than the minimum permitted length.',
+            minimum: 'Value is below the minimum permitted value.',
+            pattern: 'Value does not match the required pattern.',
+            type: 'Value has an invalid type.',
+        };
+        return messages[rule] ?? `Value violates the '${rule}' schema rule.`;
     }
 }
 exports.LogEventValidator = LogEventValidator;

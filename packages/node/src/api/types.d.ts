@@ -82,11 +82,24 @@ export interface LogEvent {
     /** Custom attributes bag. */
     attributes?: Attributes;
     /** Validation errors discovered during processing (populated in LENIENT mode). */
-    'dt3.validation.errors'?: string[];
+    'dt3.validation.errors'?: ValidationErrorDetail[];
     /** Field paths that were masked by the MaskingEngine. */
     'dt3.security.masked_fields'?: string[];
     /** Catch-all for forward-compatible extension fields. */
     [key: string]: unknown;
+}
+/**
+ * A sanitized diagnostic for one JSON Schema validation failure.
+ *
+ * All members correspond to the canonical validation-result schema contract.
+ */
+export interface ValidationErrorDetail {
+    /** Dot-separated field path, or `$` when the failure applies to the root object. */
+    field: string;
+    /** Sanitized description of the failed validation rule. */
+    message: string;
+    /** JSON Schema keyword that was violated. */
+    rule: string;
 }
 /**
  * Result of validating a `LogEvent` against the schema.
@@ -94,8 +107,8 @@ export interface LogEvent {
 export interface ValidationResult {
     /** Whether the event passed all validation rules. */
     valid: boolean;
-    /** Human-readable error messages, empty when `valid` is true. */
-    errors: string[];
+    /** Structured schema-rule diagnostics, empty when `valid` is true. */
+    errors: ValidationErrorDetail[];
     /** The validation mode that was in effect. */
     mode: ValidationMode;
 }

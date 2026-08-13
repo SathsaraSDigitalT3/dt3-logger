@@ -100,12 +100,38 @@ describe('LogEventValidator', () => {
     const result = new LogEventValidator().validate(invalid);
 
     expect(result.valid).toBe(false);
-    expect(result.errors.some((error) => error.includes('deployment.environment'))).toBe(true);
-    expect(result.errors.some((error) => error.includes('duration.ms'))).toBe(true);
-    expect(result.errors.some((error) => error.includes('error.retryable'))).toBe(true);
-    expect(result.errors.some((error) => error.includes('attributes'))).toBe(true);
-    expect(result.errors.some((error) => error.includes('severity'))).toBe(true);
-    expect(result.errors.every((error) => !error.includes('contains-secret-value'))).toBe(true);
+    expect(result.errors).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ field: 'deployment.environment', rule: 'required' }),
+        expect.objectContaining({ field: 'duration.ms', rule: 'minimum' }),
+        expect.objectContaining({ field: 'error.retryable', rule: 'type' }),
+        expect.objectContaining({ field: 'attributes', rule: 'type' }),
+        expect.objectContaining({ field: 'severity', rule: 'enum' }),
+      ]),
+    );
+    expect(result.errors.every(({ field, message, rule }) =>
+      typeof field === 'string' && typeof message === 'string' && typeof rule === 'string',
+    )).toBe(true);
+    expect(JSON.stringify(result.errors)).not.toContain('contains-secret-value');
+  });
+
+  it('reports malformed timestamps using the date-time format rule when validation is enabled', () => {
+    const invalid = validEvent();
+    invalid.timestamp = 'not-a-date-time';
+
+    const lenientResult = new LogEventValidator().validate(invalid, ValidationMode.LENIENT);
+    const strictResult = new LogEventValidator().validate(invalid, ValidationMode.STRICT);
+
+    expect(lenientResult).toMatchObject({
+      valid: false,
+      mode: ValidationMode.LENIENT,
+      errors: [expect.objectContaining({ field: 'timestamp', rule: 'format' })],
+    });
+    expect(strictResult).toMatchObject({
+      valid: false,
+      mode: ValidationMode.STRICT,
+      errors: [expect.objectContaining({ field: 'timestamp', rule: 'format' })],
+    });
   });
 
   it('skips validation in OFF mode', () => {
@@ -194,7 +220,7 @@ describe('LoggerImpl behavior', () => {
     expect((event.attributes as Record<string, unknown>).credentials).toEqual({ token: '[REDACTED]' });
     expect(event['dt3.security.masked_fields']).toEqual(['attributes.credentials.token']);
     expect(event['dt3.validation.errors']).toEqual(
-      expect.arrayContaining([expect.stringContaining('event.name')]),
+      expect.arrayContaining([expect.objectContaining({ field: 'event.name', rule: 'pattern' })]),
     );
     expect(JSON.stringify(event['dt3.validation.errors'])).not.toContain('sensitive-token');
     expect(context.attributes.credentials.token).toBe('sensitive-token');
@@ -217,7 +243,9 @@ describe('LoggerImpl behavior', () => {
     const event = readExportedEvent(logSpy);
     expect(event['deployment.environment']).toBeUndefined();
     expect(event['dt3.validation.errors']).toEqual(
-      expect.arrayContaining([expect.stringContaining('deployment.environment')]),
+      expect.arrayContaining([
+        expect.objectContaining({ field: 'deployment.environment', rule: 'required' }),
+      ]),
     );
   });
 
@@ -235,10 +263,15 @@ describe('LoggerImpl behavior', () => {
   it('exports invalid events without validation metadata in OFF mode', () => {
     const logger = createLogger(baseConfig(ValidationMode.OFF));
 
-    logger.info('Invalid event', { 'event.name': 'not-valid', 'duration.ms': -1 });
+    logger.info('Invalid event', {
+      timestamp: 'not-a-date-time',
+      'event.name': 'not-valid',
+      'duration.ms': -1,
+    });
 
     const event = readExportedEvent(logSpy);
     expect(event['event.name']).toBe('not-valid');
+    expect(event.timestamp).toBe('not-a-date-time');
     expect(event['dt3.validation.errors']).toBeUndefined();
   });
 
@@ -247,7 +280,7 @@ describe('LoggerImpl behavior', () => {
     defaultLogger.info('Invalid event', { 'event.name': 'not-valid' });
 
     expect(readExportedEvent(logSpy)['dt3.validation.errors']).toEqual(
-      expect.arrayContaining([expect.stringContaining('event.name')]),
+      expect.arrayContaining([expect.objectContaining({ field: 'event.name', rule: 'pattern' })]),
     );
 
     expect(() => createLogger(baseConfig('UNSUPPORTED'))).toThrow(

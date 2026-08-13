@@ -1,4 +1,4 @@
-import { ValidationMode, ValidationResult } from '../api/types';
+import { ValidationErrorDetail, ValidationMode, ValidationResult } from '../api/types';
 /**
  * Raised when a log event fails canonical schema validation in STRICT mode.
  */
@@ -8,7 +8,8 @@ export declare class ValidationError extends Error {
      *
      * @param errors - Schema-rule errors that do not contain caller-supplied values.
      */
-    constructor(errors: string[]);
+    constructor(errors: ValidationErrorDetail[]);
+    private static formatErrors;
 }
 /**
  * Validate structured log events against the canonical repository schema.
@@ -24,10 +25,12 @@ export declare class LogEventValidator {
      *
      * @param event - Structured log event to validate.
      * @param mode - Repository-defined validation mode.
-     * @returns The validation outcome with sanitized schema-rule error messages.
+     * @returns The validation outcome with structured, sanitized schema-rule diagnostics.
      * @throws Error if the validation mode is not repository-defined.
      */
     validate(event: Readonly<Record<string, unknown>>, mode?: ValidationMode | string): ValidationResult;
     private errorSortKey;
     private formatError;
+    private toFieldPath;
+    private messageForRule;
 }

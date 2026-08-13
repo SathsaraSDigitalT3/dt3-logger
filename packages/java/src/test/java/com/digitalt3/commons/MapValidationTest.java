@@ -42,17 +42,14 @@ public class MapValidationTest {
         context.put("error.retryable", true);
         context.put("attributes", Map.of("request.id", "request-1"));
 
-        String output = emit(
-            ValidationMode.LENIENT,
-            context
-        );
+        String output = emit(ValidationMode.LENIENT, context);
 
         assertTrue(output.contains("\"event.name\":\"USER_LOGIN\""));
         assertFalse(output.contains("\"dt3.validation.errors\""));
     }
 
     @Test
-    public void presentNullRequiredPropertyIsRejectedAsTypeError() {
+    public void presentNullRequiredPropertyIsRejectedAsStructuredTypeError() {
         for (String field : requiredFields()) {
             Map<String, Object> context = new LinkedHashMap<>();
             context.put(field, null);
@@ -60,20 +57,20 @@ public class MapValidationTest {
             String output = emit(ValidationMode.LENIENT, context);
 
             assertTrue("Expected diagnostics for " + field, output.contains("\"dt3.validation.errors\""));
-            assertTrue(
-                "Expected path for " + field,
-                output.contains("/" + escapeJsonPointer(field))
-            );
-            assertTrue("Expected type diagnostic for " + field, output.contains("invalid type"));
+            assertStructuredError(output, field, "type", "Value has an invalid type");
             assertFalse(
                 "A present-null value must not also be diagnosed as missing: " + field,
-                output.contains("Required property is missing")
+                output.contains("\"rule\":\"required\"")
+            );
+            assertTrue(
+                "Invalid type values must be redacted for " + field,
+                output.contains("\"" + field + "\":\"[REDACTED]\"")
             );
         }
     }
 
     @Test
-    public void missingRequiredPropertyIsReported() {
+    public void missingRequiredPropertyIsReportedAsStructuredError() {
         SdkConfig config = validConfig(ValidationMode.LENIENT);
         config.setDeploymentEnvironment(null);
         Logger logger = LoggerFactory.createLogger(config);
@@ -87,8 +84,12 @@ public class MapValidationTest {
         String output = stdout.toString(StandardCharsets.UTF_8).trim();
 
         assertTrue(output.contains("\"dt3.validation.errors\""));
-        assertTrue(output.contains("Required property is missing"));
-        assertTrue(output.contains("deployment.environment"));
+        assertStructuredError(
+            output,
+            "deployment.environment",
+            "required",
+            "Required property is missing"
+        );
     }
 
     @Test
@@ -113,9 +114,10 @@ public class MapValidationTest {
 
         assertTrue(output.contains("\"dt3.validation.errors\""));
         for (String field : context.keySet()) {
+            assertStructuredError(output, field, "type", "Value has an invalid type");
             assertTrue(
-                "Expected type diagnostic path for " + field,
-                output.contains("/" + escapeJsonPointer(field))
+                "Invalid type values must be redacted for " + field,
+                output.contains("\"" + field + "\":\"[REDACTED]\"")
             );
         }
     }
@@ -129,8 +131,8 @@ public class MapValidationTest {
             String output = emit(ValidationMode.LENIENT, context);
 
             assertTrue(output.contains("\"dt3.validation.errors\""));
-            assertTrue(output.contains("/attributes"));
-            assertTrue(output.contains("invalid type"));
+            assertStructuredError(output, "attributes", "type", "Value has an invalid type");
+            assertTrue(output.contains("\"attributes\":\"[REDACTED]\""));
         }
     }
 
@@ -158,7 +160,7 @@ public class MapValidationTest {
             () -> logger.info("Validation test", Map.of("attributes", "secret-invalid-value"))
         );
 
-        assertTrue(exception.getMessage().contains("invalid type"));
+        assertTrue(exception.getMessage().contains("Value has an invalid type"));
         assertFalse(exception.getMessage().contains("secret-invalid-value"));
     }
 
@@ -183,14 +185,12 @@ public class MapValidationTest {
     @Test
     public void lenientDiagnosticsDoNotExposeInvalidCallerValues() {
         String secret = "super-secret-invalid-attributes";
-        String output = emit(
-            ValidationMode.LENIENT,
-            Map.of("attributes", secret)
-        );
+        String output = emit(ValidationMode.LENIENT, Map.of("attributes", secret));
 
         assertTrue(output.contains("\"dt3.validation.errors\""));
-        assertTrue(output.contains("invalid type"));
+        assertStructuredError(output, "attributes", "type", "Value has an invalid type");
         assertFalse(output.contains(secret));
+        assertTrue(output.contains("\"attributes\":\"[REDACTED]\""));
     }
 
     @Test
@@ -230,6 +230,21 @@ public class MapValidationTest {
         assertThrows(
             IllegalArgumentException.class,
             () -> logger.info("Validation test", Map.of("event.name", "USER_LOGIN"))
+        );
+    }
+
+    private void assertStructuredError(String output, String field, String rule, String message) {
+        assertTrue(
+            "Expected field for " + field,
+            output.contains("\"field\":\"" + field + "\"")
+        );
+        assertTrue(
+            "Expected message for " + field,
+            output.contains("\"message\":\"" + message + "\"")
+        );
+        assertTrue(
+            "Expected rule for " + field,
+            output.contains("\"rule\":\"" + rule + "\"")
         );
     }
 
@@ -278,9 +293,5 @@ public class MapValidationTest {
             "service.version",
             "deployment.environment"
         };
-    }
-
-    private String escapeJsonPointer(String field) {
-        return field.replace("~", "~0").replace("/", "~1");
     }
 }

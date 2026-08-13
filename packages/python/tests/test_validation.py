@@ -21,6 +21,13 @@ def _config(validation_mode: str = "LENIENT", **overrides: object) -> dict[str, 
     }
 
 
+def _assert_error_shape(error: object) -> None:
+    """Assert that a validation error matches the canonical object contract."""
+    assert isinstance(error, dict)
+    assert set(error) == {"field", "message", "rule"}
+    assert all(isinstance(value, str) for value in error.values())
+
+
 def test_validator_accepts_canonical_event_with_nested_context_tenant_and_error_fields() -> None:
     event = {
         "timestamp": "2026-08-13T12:00:00+00:00",
@@ -48,7 +55,35 @@ def test_validator_accepts_canonical_event_with_nested_context_tenant_and_error_
     assert result.mode == "LENIENT"
 
 
-def test_validator_reports_missing_required_field_without_exposing_event_values() -> None:
+@pytest.mark.parametrize(
+    "timestamp",
+    [
+        "2026-08-13T12:00:00Z",
+        "2026-08-13T12:00:00+00:00",
+        "2026-08-13T12:00:00.123456-05:00",
+    ],
+)
+def test_validator_accepts_rfc3339_date_time_values(timestamp: str) -> None:
+    event = {
+        "timestamp": timestamp,
+        "severity": "INFO",
+        "message": "Test",
+        "event.name": "TEST_EVENT",
+        "schema.version": "1.0.0",
+        "sdk.name": "dt3-python",
+        "sdk.version": "0.1.0",
+        "service.name": "test-service",
+        "service.version": "1.0.0",
+        "deployment.environment": "test",
+    }
+
+    result = LogEventValidator().validate(event)
+
+    assert result.valid is True
+    assert result.errors == []
+
+
+def test_validator_reports_missing_required_field_as_sanitized_structured_detail() -> None:
     event = {
         "timestamp": "2026-08-13T12:00:00+00:00",
         "severity": "INFO",
@@ -64,13 +99,19 @@ def test_validator_reports_missing_required_field_without_exposing_event_values(
     result = LogEventValidator().validate(event)
 
     assert result.valid is False
-    assert result.errors == [
-        "required property is missing (deployment.environment)"
+    assert [detail.to_dict() for detail in result.errors] == [
+        {
+            "field": "deployment.environment",
+            "message": "required property is missing",
+            "rule": "required",
+        }
     ]
-    assert all("contains-secret-value" not in error for error in result.errors)
+    assert all(
+        "contains-secret-value" not in detail.message for detail in result.errors
+    )
 
 
-def test_validator_reports_invalid_types_and_nested_structure() -> None:
+def test_validator_reports_invalid_types_and_nested_structure_as_structured_details() -> None:
     event = {
         "timestamp": "2026-08-13T12:00:00+00:00",
         "severity": "INFO",
@@ -88,11 +129,77 @@ def test_validator_reports_invalid_types_and_nested_structure() -> None:
     }
 
     result = LogEventValidator().validate(event)
+    errors_by_field = {detail.field: detail for detail in result.errors}
 
     assert result.valid is False
-    assert any("duration.ms" in error for error in result.errors)
-    assert any("error.retryable" in error for error in result.errors)
-    assert any("attributes" in error for error in result.errors)
+    assert errors_by_field["duration.ms"].rule == "minimum"
+    assert errors_by_field["error.retryable"].rule == "type"
+    assert errors_by_field["attributes"].rule == "type"
+    assert all(
+        detail.message == f"violates schema rule '{detail.rule}'"
+        for detail in result.errors
+    )
+
+
+def test_validator_reports_malformed_timestamp_with_format_rule() -> None:
+    event = {
+        "timestamp": "not-a-date-time",
+        "severity": "INFO",
+        "message": "Test",
+        "event.name": "TEST_EVENT",
+        "schema.version": "1.0.0",
+        "sdk.name": "dt3-python",
+        "sdk.version": "0.1.0",
+        "service.name": "test-service",
+        "service.version": "1.0.0",
+        "deployment.environment": "test",
+    }
+
+    result = LogEventValidator().validate(event)
+
+    assert result.valid is False
+    assert [detail.to_dict() for detail in result.errors] == [
+        {
+            "field": "timestamp",
+            "message": "violates schema rule 'format'",
+            "rule": "format",
+        }
+    ]
+
+
+@pytest.mark.parametrize(
+    "timestamp",
+    [
+        "2026-08-13T12:00:00",
+        "2026-08-13T12:00:00.123456",
+        "2026-08-13",
+        "not-a-date-time",
+    ],
+)
+def test_validator_rejects_non_rfc3339_date_time_values(timestamp: str) -> None:
+    event = {
+        "timestamp": timestamp,
+        "severity": "INFO",
+        "message": "Test",
+        "event.name": "TEST_EVENT",
+        "schema.version": "1.0.0",
+        "sdk.name": "dt3-python",
+        "sdk.version": "0.1.0",
+        "service.name": "test-service",
+        "service.version": "1.0.0",
+        "deployment.environment": "test",
+    }
+
+    result = LogEventValidator().validate(event)
+
+    assert result.valid is False
+    assert [detail.to_dict() for detail in result.errors] == [
+        {
+            "field": "timestamp",
+            "message": "violates schema rule 'format'",
+            "rule": "format",
+        }
+    ]
 
 
 def test_strict_mode_raises_for_invalid_log_event_and_does_not_export(capsys) -> None:
@@ -102,10 +209,13 @@ def test_strict_mode_raises_for_invalid_log_event_and_does_not_export(capsys) ->
         logger.info("Invalid event", {"event.name": "not-valid"})
 
     assert "event.name" in str(error.value)
+    assert "rule: pattern" in str(error.value)
     assert capsys.readouterr().out == ""
 
 
-def test_lenient_mode_exports_invalid_event_with_sanitized_validation_errors(capsys) -> None:
+def test_lenient_mode_exports_invalid_event_with_sanitized_structured_validation_errors(
+    capsys,
+) -> None:
     logger = create_logger(_config("LENIENT"))
 
     logger.info(
@@ -119,9 +229,12 @@ def test_lenient_mode_exports_invalid_event_with_sanitized_validation_errors(cap
 
     exported_event = json.loads(capsys.readouterr().out)
     assert exported_event["password"] == "[REDACTED]"
-    assert "dt3.validation.errors" in exported_event
-    assert any("event.name" in error for error in exported_event["dt3.validation.errors"])
-    assert all("top-secret" not in error for error in exported_event["dt3.validation.errors"])
+    validation_errors = exported_event["dt3.validation.errors"]
+    assert all(_assert_error_shape(error) is None for error in validation_errors)
+    assert any(error["field"] == "event.name" for error in validation_errors)
+    assert all(
+        "top-secret" not in error["message"] for error in validation_errors
+    )
 
 
 def test_lenient_mode_reports_missing_deployment_environment(capsys) -> None:
@@ -135,7 +248,11 @@ def test_lenient_mode_reports_missing_deployment_environment(capsys) -> None:
     exported_event = json.loads(capsys.readouterr().out)
     assert "deployment.environment" not in exported_event
     assert exported_event["dt3.validation.errors"] == [
-        "required property is missing (deployment.environment)"
+        {
+            "field": "deployment.environment",
+            "message": "required property is missing",
+            "rule": "required",
+        }
     ]
 
 
@@ -150,7 +267,7 @@ def test_default_mode_reports_missing_deployment_environment(capsys) -> None:
     assert logger.validation_mode == "LENIENT"
     assert "deployment.environment" not in exported_event
     assert any(
-        "deployment.environment" in error
+        error["field"] == "deployment.environment"
         for error in exported_event["dt3.validation.errors"]
     )
 
@@ -162,7 +279,7 @@ def test_strict_mode_rejects_missing_deployment_environment(capsys) -> None:
 
     with pytest.raises(
         ValidationError,
-        match=r"required property is missing \(deployment\.environment\)",
+        match=r"deployment\.environment: required property is missing",
     ):
         logger.info("Missing deployment metadata", {"event.name": "VALID_EVENT"})
 
@@ -177,6 +294,17 @@ def test_off_mode_skips_validation_and_does_not_attach_errors(capsys) -> None:
     exported_event = json.loads(capsys.readouterr().out)
     assert exported_event["event.name"] == "not-valid"
     assert "dt3.validation.errors" not in exported_event
+
+
+def test_off_mode_returns_success_without_evaluating_a_malformed_timestamp() -> None:
+    result = LogEventValidator().validate(
+        {"timestamp": "not-a-date-time"},
+        mode="OFF",
+    )
+
+    assert result.valid is True
+    assert result.errors == []
+    assert result.mode == "OFF"
 
 
 def test_off_mode_emits_missing_deployment_environment_without_errors(capsys) -> None:
@@ -214,7 +342,10 @@ def test_validation_runs_after_masking_and_preserves_original_context(capsys) ->
     assert exported_event["dt3.security.masked_fields"] == [
         "attributes.credentials.token"
     ]
-    assert any("event.name" in error for error in exported_event["dt3.validation.errors"])
+    assert any(
+        error["field"] == "event.name"
+        for error in exported_event["dt3.validation.errors"]
+    )
     assert context["attributes"]["credentials"]["token"] == "sensitive-token"
     assert context["attributes"]["request"]["id"] == "request-1"
 
