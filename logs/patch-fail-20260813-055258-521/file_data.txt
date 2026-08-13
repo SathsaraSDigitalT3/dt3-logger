@@ -104,13 +104,6 @@ public final class StdoutLogger implements Logger {
     }
 
     private void log(String severity, String message, Map<String, Object> context, Throwable error) {
-        ValidationMode validationMode = config.getValidationMode();
-        if (validationMode == null) {
-            throw new IllegalArgumentException(
-                "validationMode must be STRICT, LENIENT, or OFF"
-            );
-        }
-
         try {
             Map<String, Object> event = createEvent(severity, message, context, error);
             Map<String, Object> maskedEvent = maskingEngine.mask(event);
@@ -122,45 +115,19 @@ public final class StdoutLogger implements Logger {
 
             List<String> validationErrors = eventValidator.apply(
                 maskedEvent,
-                validationMode
+                config.getValidationMode()
             );
-            if (!validationErrors.isEmpty() && validationMode == ValidationMode.LENIENT) {
-                redactInvalidValues(maskedEvent, validationErrors);
+            if (!validationErrors.isEmpty() && config.getValidationMode() == ValidationMode.LENIENT) {
                 maskedEvent.put("dt3.validation.errors", validationErrors);
             }
 
             System.out.println(toJson(maskedEvent));
         } catch (IllegalArgumentException validationException) {
-            if (validationMode == ValidationMode.STRICT) {
+            if (config.getValidationMode() == ValidationMode.STRICT) {
                 throw validationException;
             }
         } catch (RuntimeException ignored) {
             // Logging is fail-open: the host application must not fail because logging failed.
-        }
-    }
-
-    /**
-     * Remove caller-provided values that failed type validation before lenient export.
-     *
-     * <p>Schema diagnostics intentionally contain only structural locations. This
-     * additional replacement prevents the invalid value itself from being emitted
-     * alongside those diagnostics.</p>
-     *
-     * @param event event that will be serialized
-     * @param validationErrors sanitized schema diagnostics
-     */
-    private void redactInvalidValues(Map<String, Object> event, List<String> validationErrors) {
-        String diagnosticPrefix = "Value has an invalid type at /";
-        for (String validationError : validationErrors) {
-            if (!validationError.startsWith(diagnosticPrefix)) {
-                continue;
-            }
-
-            String encodedField = validationError.substring(diagnosticPrefix.length());
-            String field = encodedField.replace("~1", "/").replace("~0", "~");
-            if (event.containsKey(field)) {
-                event.put(field, "[REDACTED]");
-            }
         }
     }
 
@@ -186,9 +153,10 @@ public final class StdoutLogger implements Logger {
         event.put("sdk.version", valueOrDefault(config.getSdkVersion(), "0.1.0"));
         event.put("service.name", valueOrDefault(config.getServiceName(), "unknown"));
         event.put("service.version", valueOrDefault(config.getServiceVersion(), "unknown"));
-        if (config.getDeploymentEnvironment() != null) {
-            event.put("deployment.environment", config.getDeploymentEnvironment());
-        }
+        event.put(
+            "deployment.environment",
+            valueOrDefault(config.getDeploymentEnvironment(), "unknown")
+        );
         event.putAll(safeContext);
 
         if (error != null) {

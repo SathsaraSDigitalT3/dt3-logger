@@ -1,0 +1,12 @@
+d:\Metroparks-Repos\dt3-logger/packages/java/src/main/java/com/digitalt3/commons/sdk/StdoutLogger.java
+@@ strict validation exception handling @@
+             }
+ 
+             System.out.println(toJson(maskedEvent));
+         } catch (IllegalArgumentException validationException) {
+             if (config.getValidationMode() == ValidationMode.STRICT) {
+                 throw validationException;
+             }
+         } catch (RuntimeException ignored) {
+             // Logging is fail-open: the host application must not fail because logging failed.
+         }

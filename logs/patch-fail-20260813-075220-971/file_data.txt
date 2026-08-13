@@ -1,0 +1,279 @@
+package com.digitalt3.commons;
+
+import com.digitalt3.commons.api.Logger;
+import com.digitalt3.commons.api.LoggerFactory;
+import com.digitalt3.commons.api.SdkConfig;
+import com.digitalt3.commons.api.ValidationMode;
+import org.junit.Test;
+
+import java.io.ByteArrayOutputStream;
+import java.io.PrintStream;
+import java.nio.charset.StandardCharsets;
+import java.util.LinkedHashMap;
+import java.util.Map;
+
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertThrows;
+import static org.junit.Assert.assertTrue;
+
+/**
+ * Verifies canonical map-based schema validation through the public Java Logger API.
+ */
+public class MapValidationTest {
+
+    @Test
+    public void validCanonicalEventPassesWithoutDiagnostics() {
+        Map<String, Object> context = new LinkedHashMap<>();
+        context.put("event.name", "USER_LOGIN");
+        context.put("trace.id", "0123456789abcdef0123456789abcdef");
+        context.put("span.id", "0123456789abcdef");
+        context.put("correlation.id", "correlation-1");
+        context.put("tenant.id", "tenant-1");
+        context.put("tenant.region", "us-east-1");
+        context.put("tenant.environment", "test");
+        context.put("user.id", "user-1");
+        context.put("session.id", "session-1");
+        context.put("duration.ms", 42.5);
+        context.put("error.type", "IllegalStateException");
+        context.put("error.message", "retry later");
+        context.put("error.stack", "stack trace");
+        context.put("error.code", "E_RETRY");
+        context.put("error.retryable", true);
+        context.put("attributes", Map.of("request.id", "request-1"));
+
+        String output = emit(
+            ValidationMode.LENIENT,
+            context
+        );
+
+        assertTrue(output.contains("\"event.name\":\"USER_LOGIN\""));
+        assertFalse(output.contains("\"dt3.validation.errors\""));
+    }
+
+    @Test
+    public void presentNullRequiredPropertyIsRejectedAsTypeError() {
+        for (String field : requiredFields()) {
+            Map<String, Object> context = new LinkedHashMap<>();
+            context.put(field, null);
+
+            String output = emit(ValidationMode.LENIENT, context);
+
+            assertTrue("Expected diagnostics for " + field, output.contains("\"dt3.validation.errors\""));
+            assertTrue(
+                "Expected path for " + field,
+                output.contains("/" + escapeJsonPointer(field))
+            );
+            assertTrue("Expected type diagnostic for " + field, output.contains("invalid type"));
+            assertFalse(
+                "A present-null value must not also be diagnosed as missing: " + field,
+                output.contains("Required property is missing")
+            );
+        }
+    }
+
+    @Test
+    public void missingRequiredPropertyIsReported() {
+        String output = emit(
+            ValidationMode.LENIENT,
+            Map.of("event.name", "VALID_EVENT")
+        );
+
+        assertTrue(output.contains("\"dt3.validation.errors\""));
+        assertTrue(output.contains("Required property is missing"));
+        assertTrue(output.contains("deployment.environment"));
+    }
+
+    @Test
+    public void lenientModeValidatesCanonicalFieldTypes() {
+        Map<String, Object> context = new LinkedHashMap<>();
+        context.put("sdk.name", 1);
+        context.put("service.version", 2);
+        context.put("deployment.environment", 3);
+        context.put("correlation.id", 4);
+        context.put("tenant.id", 5);
+        context.put("tenant.region", 6);
+        context.put("tenant.environment", 7);
+        context.put("user.id", 8);
+        context.put("session.id", 9);
+        context.put("error.type", 10);
+        context.put("error.message", 11);
+        context.put("error.stack", 12);
+        context.put("error.code", 13);
+        context.put("attributes", java.util.List.of("not-an-object"));
+
+        String output = emit(ValidationMode.LENIENT, context);
+
+        assertTrue(output.contains("\"dt3.validation.errors\""));
+        for (String field : context.keySet()) {
+            assertTrue(
+                "Expected type diagnostic path for " + field,
+                output.contains("/" + escapeJsonPointer(field))
+            );
+        }
+    }
+
+    @Test
+    public void attributesArrayScalarAndNullAreRejectedInLenientMode() {
+        for (Object invalidAttributes : new Object[] {java.util.List.of("array"), "scalar", 1, null}) {
+            Map<String, Object> context = new LinkedHashMap<>();
+            context.put("attributes", invalidAttributes);
+
+            String output = emit(ValidationMode.LENIENT, context);
+
+            assertTrue(output.contains("\"dt3.validation.errors\""));
+            assertTrue(output.contains("/attributes"));
+            assertTrue(output.contains("invalid type"));
+        }
+    }
+
+    @Test
+    public void strictModeThrowsAndDoesNotWriteInvalidEventToStdout() {
+        SdkConfig config = validConfig(ValidationMode.STRICT);
+        Logger logger = LoggerFactory.createLogger(config);
+        ByteArrayOutputStream stdout = new ByteArrayOutputStream();
+
+        captureStdout(stdout, () -> assertThrows(
+            IllegalArgumentException.class,
+            () -> logger.info("Validation test", Map.of("sdk.name", 123))
+        ));
+
+        assertEquals("", stdout.toString(StandardCharsets.UTF_8).trim());
+    }
+
+    @Test
+    public void strictValidationExceptionIsNotSwallowed() {
+        SdkConfig config = validConfig(ValidationMode.STRICT);
+        Logger logger = LoggerFactory.createLogger(config);
+
+        IllegalArgumentException exception = assertThrows(
+            IllegalArgumentException.class,
+            () -> logger.info("Validation test", Map.of("attributes", "secret-invalid-value"))
+        );
+
+        assertTrue(exception.getMessage().contains("invalid type"));
+        assertFalse(exception.getMessage().contains("secret-invalid-value"));
+    }
+
+    @Test
+    public void lenientDiagnosticsDoNotExposeCallerValuesAndMaskingRunsFirst() {
+        SdkConfig config = validConfig(ValidationMode.LENIENT);
+        config.setMaskingFields(java.util.List.of("sdk.name"));
+        Logger logger = LoggerFactory.createLogger(config);
+        ByteArrayOutputStream stdout = new ByteArrayOutputStream();
+
+        captureStdout(stdout, () -> logger.info(
+            "Validation test",
+            Map.of("sdk.name", "caller-secret")
+        ));
+
+        String output = stdout.toString(StandardCharsets.UTF_8).trim();
+        assertFalse(output.contains("caller-secret"));
+        assertFalse(output.contains("\"dt3.validation.errors\""));
+        assertTrue(output.contains("\"sdk.name\":\"[REDACTED]\""));
+    }
+
+    @Test
+    public void lenientDiagnosticsDoNotExposeInvalidCallerValues() {
+        String secret = "super-secret-invalid-attributes";
+        String output = emit(
+            ValidationMode.LENIENT,
+            Map.of("attributes", secret)
+        );
+
+        assertTrue(output.contains("\"dt3.validation.errors\""));
+        assertTrue(output.contains("invalid type"));
+        assertFalse(output.contains(secret));
+    }
+
+    @Test
+    public void offModeSkipsValidationAndDoesNotAttachErrors() {
+        String output = emit(
+            ValidationMode.OFF,
+            Map.of(
+                "sdk.name", 1,
+                "attributes", java.util.List.of("invalid")
+            )
+        );
+
+        assertTrue(output.contains("\"sdk.name\":1"));
+        assertTrue(output.contains("\"attributes\":[\"invalid\"]"));
+        assertFalse(output.contains("\"dt3.validation.errors\""));
+    }
+
+    @Test
+    public void unknownTopLevelPropertiesRemainAccepted() {
+        String output = emit(
+            ValidationMode.LENIENT,
+            Map.of(
+                "event.name", "UNKNOWN_PROPERTY_EVENT",
+                "application.unknown", Map.of("nested", true)
+            )
+        );
+
+        assertTrue(output.contains("\"application.unknown\":{\"nested\":true}"));
+        assertFalse(output.contains("\"dt3.validation.errors\""));
+    }
+
+    @Test
+    public void nullValidationModeIsRejectedRatherThanDisablingValidation() {
+        SdkConfig config = validConfig(null);
+        Logger logger = LoggerFactory.createLogger(config);
+
+        assertThrows(
+            IllegalArgumentException.class,
+            () -> logger.info("Validation test", Map.of("event.name", "USER_LOGIN"))
+        );
+    }
+
+    private String emit(ValidationMode validationMode, Map<String, Object> context) {
+        SdkConfig config = validConfig(validationMode);
+        Logger logger = LoggerFactory.createLogger(config);
+        ByteArrayOutputStream stdout = new ByteArrayOutputStream();
+
+        captureStdout(stdout, () -> {
+            logger.info("Validation test", context);
+            logger.flush();
+        });
+
+        return stdout.toString(StandardCharsets.UTF_8).trim();
+    }
+
+    private SdkConfig validConfig(ValidationMode validationMode) {
+        SdkConfig config = new SdkConfig();
+        config.setServiceName("validation-test");
+        config.setServiceVersion("1.0.0");
+        config.setDeploymentEnvironment("test");
+        config.setValidationMode(validationMode);
+        return config;
+    }
+
+    private void captureStdout(ByteArrayOutputStream stdout, Runnable action) {
+        PrintStream originalOut = System.out;
+        System.setOut(new PrintStream(stdout, true, StandardCharsets.UTF_8));
+        try {
+            action.run();
+        } finally {
+            System.setOut(originalOut);
+        }
+    }
+
+    private String[] requiredFields() {
+        return new String[] {
+            "timestamp",
+            "severity",
+            "message",
+            "event.name",
+            "schema.version",
+            "sdk.name",
+            "sdk.version",
+            "service.name",
+            "service.version",
+            "deployment.environment"
+        };
+    }
+
+    private String escapeJsonPointer(String field) {
+        return field.replace("~", "~0").replace("/", "~1");
+    }
+}

@@ -2,5 +2,12 @@
 
 from .factory import create_logger
 from .masking import MaskingEngine
+from .validation import LogEventValidator, ValidationError, ValidationResult
 
-__all__ = ["MaskingEngine", "create_logger"]
+__all__ = [
+    "LogEventValidator",
+    "MaskingEngine",
+    "ValidationError",
+    "ValidationResult",
+    "create_logger",
+]
