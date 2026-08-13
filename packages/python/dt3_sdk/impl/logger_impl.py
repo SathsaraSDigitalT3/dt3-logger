@@ -8,25 +8,29 @@ from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 from dt3_sdk.masking import MaskingEngine
+from dt3_sdk.validation import LogEventValidator, ValidationError
 
 
 class LoggerImpl:
-    """Build and export structured DT3 log events."""
+    """Build, mask, validate, and export structured DT3 log events."""
 
     def __init__(self, config: Dict[str, Any]):
         """Initialize a logger from SDK configuration.
 
         Args:
-            config: SDK configuration including service metadata and masking settings.
+            config: SDK configuration including service metadata, masking settings,
+                and the repository-defined ``validation.mode`` setting.
         """
         self.config = config
         self.exporter = config.get("exporter", "stdout")
+        self.validation_mode = config.get("validation.mode", "LENIENT").upper()
         self.masking_engine = MaskingEngine(
             sensitive_fields=config.get("masking.fields"),
             replacement_value=config.get("masking.replacement_value", "[REDACTED]"),
             track_masked_fields=config.get("masking.track_masked_fields", False),
             enabled=config.get("masking.enabled", True),
         )
+        self.validator = LogEventValidator()
 
     def _log(
         self,
@@ -35,7 +39,7 @@ class LoggerImpl:
         context: Optional[Dict[str, Any]] = None,
         error: Optional[Exception] = None,
     ) -> None:
-        """Create, mask, and export one structured log event."""
+        """Create, mask, validate, and export one structured log event."""
         context = context or {}
         event_name = context.get("event.name", "GENERIC_EVENT")
 
@@ -49,8 +53,12 @@ class LoggerImpl:
             "sdk.version": "0.1.0",
             "service.name": self.config.get("service.name", "unknown"),
             "service.version": self.config.get("service.version", "unknown"),
-            "deployment.environment": self.config.get("deployment.environment", "unknown"),
         }
+        # Required deployment metadata must remain absent when it was not configured.
+        # Supplying a placeholder here would hide the schema violation from LENIENT
+        # and STRICT validation modes.
+        if "deployment.environment" in self.config:
+            log_event["deployment.environment"] = self.config["deployment.environment"]
 
         # Context is copied into the event before recursive masking is applied.
         log_event.update(context)
@@ -63,9 +71,31 @@ class LoggerImpl:
                     traceback.format_exception(type(error), error, error.__traceback__)
                 )
 
+        # The repository pipeline defines masking before validation, preventing
+        # sensitive values from being exposed through validation handling.
         masked_event, masked_fields = self.masking_engine.mask(log_event)
         if masked_fields:
             masked_event["dt3.security.masked_fields"] = masked_fields
+
+        validation_result = self.validator.validate(
+            masked_event, mode=self.validation_mode
+        )
+        if not validation_result.valid:
+            if validation_result.mode == "STRICT":
+                raise ValidationError(
+                    "Log event failed schema validation: "
+                    + "; ".join(
+                        (
+                            f"{detail.field}: {detail.message} "
+                            f"(rule: {detail.rule})"
+                        )
+                        for detail in validation_result.errors
+                    )
+                )
+            if validation_result.mode == "LENIENT":
+                masked_event["dt3.validation.errors"] = [
+                    detail.to_dict() for detail in validation_result.errors
+                ]
 
         # Preserve existing exporter behavior: stdout is the only implemented exporter.
         if self.exporter == "stdout":

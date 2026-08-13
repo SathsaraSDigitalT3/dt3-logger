@@ -2,6 +2,8 @@ package com.digitalt3.commons.sdk;
 
 import com.digitalt3.commons.api.Logger;
 import com.digitalt3.commons.api.SdkConfig;
+import com.digitalt3.commons.api.ValidationMode;
+import com.digitalt3.commons.api.Validator;
 
 import java.io.PrintWriter;
 import java.io.StringWriter;
@@ -26,6 +28,7 @@ public final class StdoutLogger implements Logger {
 
     private final SdkConfig config;
     private final RecursiveMaskingEngine maskingEngine;
+    private final MapEventValidator eventValidator;
 
     /**
      * Create a logger from SDK metadata and supported masking settings.
@@ -40,6 +43,7 @@ public final class StdoutLogger implements Logger {
             config.isMaskingTrackMaskedFields(),
             config.isMaskingEnabled()
         );
+        this.eventValidator = new MapEventValidator();
     }
 
     // PUBLIC_INTERFACE
@@ -101,6 +105,13 @@ public final class StdoutLogger implements Logger {
     }
 
     private void log(String severity, String message, Map<String, Object> context, Throwable error) {
+        ValidationMode validationMode = config.getValidationMode();
+        if (validationMode == null) {
+            throw new IllegalArgumentException(
+                "validationMode must be STRICT, LENIENT, or OFF"
+            );
+        }
+
         try {
             Map<String, Object> event = createEvent(severity, message, context, error);
             Map<String, Object> maskedEvent = maskingEngine.mask(event);
@@ -110,9 +121,57 @@ public final class StdoutLogger implements Logger {
                 maskedEvent.put("dt3.security.masked_fields", maskedFields);
             }
 
+            List<Validator.ValidationErrorDetail> validationErrors = eventValidator.apply(
+                maskedEvent,
+                validationMode
+            );
+            if (!validationErrors.isEmpty() && validationMode == ValidationMode.LENIENT) {
+                redactInvalidValues(maskedEvent, validationErrors);
+                maskedEvent.put(
+                    "dt3.validation.errors",
+                    validationErrors.stream()
+                        .map(errorDetail -> Map.of(
+                            "field", errorDetail.field(),
+                            "message", errorDetail.message(),
+                            "rule", errorDetail.rule()
+                        ))
+                        .toList()
+                );
+            }
+
             System.out.println(toJson(maskedEvent));
+        } catch (IllegalArgumentException validationException) {
+            if (validationMode == ValidationMode.STRICT) {
+                throw validationException;
+            }
         } catch (RuntimeException ignored) {
             // Logging is fail-open: the host application must not fail because logging failed.
+        }
+    }
+
+    /**
+     * Remove caller-provided values that failed type validation before lenient export.
+     *
+     * <p>Schema diagnostics intentionally contain only structural locations. This
+     * additional replacement prevents the invalid value itself from being emitted
+     * alongside those diagnostics.</p>
+     *
+     * @param event event that will be serialized
+     * @param validationErrors sanitized schema diagnostics
+     */
+    private void redactInvalidValues(
+        Map<String, Object> event,
+        List<Validator.ValidationErrorDetail> validationErrors
+    ) {
+        for (Validator.ValidationErrorDetail validationError : validationErrors) {
+            if (!"type".equals(validationError.rule())) {
+                continue;
+            }
+
+            String field = validationError.field();
+            if (event.containsKey(field)) {
+                event.put(field, "[REDACTED]");
+            }
         }
     }
 
@@ -138,10 +197,9 @@ public final class StdoutLogger implements Logger {
         event.put("sdk.version", valueOrDefault(config.getSdkVersion(), "0.1.0"));
         event.put("service.name", valueOrDefault(config.getServiceName(), "unknown"));
         event.put("service.version", valueOrDefault(config.getServiceVersion(), "unknown"));
-        event.put(
-            "deployment.environment",
-            valueOrDefault(config.getDeploymentEnvironment(), "unknown")
-        );
+        if (config.getDeploymentEnvironment() != null) {
+            event.put("deployment.environment", config.getDeploymentEnvironment());
+        }
         event.putAll(safeContext);
 
         if (error != null) {
