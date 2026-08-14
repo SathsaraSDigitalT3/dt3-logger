@@ -4,6 +4,7 @@ from .factory import create_logger
 from .file_transport import FileTransport
 from .http_transport import HttpTransport, HttpTransportError
 from .masking import MaskingEngine
+from .otlp_transport import OtlpTransport, OtlpTransportError
 from .validation import (
     LogEventValidator,
     ValidationError,
@@ -17,6 +18,8 @@ __all__ = [
     "HttpTransportError",
     "LogEventValidator",
     "MaskingEngine",
+    "OtlpTransport",
+    "OtlpTransportError",
     "ValidationError",
     "ValidationErrorDetail",
     "ValidationResult",

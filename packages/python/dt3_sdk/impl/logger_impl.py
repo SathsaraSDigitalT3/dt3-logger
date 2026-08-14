@@ -10,6 +10,7 @@ from typing import Any, Dict, Optional
 from dt3_sdk.file_transport import FileTransport
 from dt3_sdk.http_transport import HttpTransport
 from dt3_sdk.masking import MaskingEngine
+from dt3_sdk.otlp_transport import OtlpTransport, OtlpTransportError
 from dt3_sdk.validation import LogEventValidator, ValidationError
 
 
@@ -41,6 +42,7 @@ class LoggerImpl:
         self.validator = LogEventValidator()
         self._file_transport: Optional[FileTransport] = None
         self._http_transport: Optional[HttpTransport] = None
+        self._otlp_transport: Optional[OtlpTransport] = None
 
         if self.exporter == "file":
             self._file_transport = FileTransport(config.get("file.path", ""))
@@ -49,6 +51,12 @@ class LoggerImpl:
                 endpoint=config.get("http.endpoint", ""),
                 timeout=config.get("http.timeout", 10.0),
                 headers=config.get("http.headers"),
+            )
+        elif self.exporter == "otlp":
+            self._otlp_transport = OtlpTransport(
+                endpoint=config.get("otlp.endpoint", ""),
+                timeout=config.get("otlp.timeout", 10.0),
+                headers=config.get("otlp.headers"),
             )
         elif self.exporter != "stdout":
             raise ValueError(f"Unsupported exporter: {self.exporter}")
@@ -125,6 +133,14 @@ class LoggerImpl:
             self._file_transport.export(masked_event)
         elif self._http_transport is not None:
             self._http_transport.export(masked_event)
+        elif self._otlp_transport is not None:
+            # Logger calls are fail-open: OTLP transport users still receive
+            # OtlpTransportError directly, but application logging is not
+            # interrupted when an OTLP collector is unavailable.
+            try:
+                self._otlp_transport.export(masked_event)
+            except OtlpTransportError:
+                pass
 
     # PUBLIC_INTERFACE
     def debug(self, message: str, context: Optional[Dict[str, Any]] = None) -> None:
@@ -158,6 +174,8 @@ class LoggerImpl:
             self._file_transport.flush()
         if self._http_transport is not None:
             self._http_transport.flush()
+        if self._otlp_transport is not None:
+            self._otlp_transport.flush()
 
     # PUBLIC_INTERFACE
     def close(self) -> None:
@@ -166,3 +184,5 @@ class LoggerImpl:
             self._file_transport.close()
         if self._http_transport is not None:
             self._http_transport.close()
+        if self._otlp_transport is not None:
+            self._otlp_transport.close()
