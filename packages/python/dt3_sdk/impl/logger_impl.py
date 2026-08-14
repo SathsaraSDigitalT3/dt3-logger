@@ -1,4 +1,4 @@
-"""Concrete stdout logger implementation for the DT3 Commons Python SDK."""
+"""Concrete logger implementation for the DT3 Commons Python SDK."""
 
 from __future__ import annotations
 
@@ -7,6 +7,7 @@ import traceback
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
+from dt3_sdk.file_transport import FileTransport
 from dt3_sdk.masking import MaskingEngine
 from dt3_sdk.validation import LogEventValidator, ValidationError
 
@@ -19,7 +20,13 @@ class LoggerImpl:
 
         Args:
             config: SDK configuration including service metadata, masking settings,
-                and the repository-defined ``validation.mode`` setting.
+                validation mode, exporter selection, and file destination when the
+                ``file`` exporter is selected.
+
+        Raises:
+            ValueError: If an unsupported exporter is configured or a file exporter
+                is selected without ``file.path``.
+            OSError: If the configured file destination cannot be opened.
         """
         self.config = config
         self.exporter = config.get("exporter", "stdout")
@@ -31,6 +38,12 @@ class LoggerImpl:
             enabled=config.get("masking.enabled", True),
         )
         self.validator = LogEventValidator()
+        self._file_transport: Optional[FileTransport] = None
+
+        if self.exporter == "file":
+            self._file_transport = FileTransport(config.get("file.path", ""))
+        elif self.exporter != "stdout":
+            raise ValueError(f"Unsupported exporter: {self.exporter}")
 
     def _log(
         self,
@@ -97,9 +110,11 @@ class LoggerImpl:
                     detail.to_dict() for detail in validation_result.errors
                 ]
 
-        # Preserve existing exporter behavior: stdout is the only implemented exporter.
+        # Export only the final masked and validation-processed canonical event.
         if self.exporter == "stdout":
             print(json.dumps(masked_event))
+        elif self._file_transport is not None:
+            self._file_transport.export(masked_event)
 
     # PUBLIC_INTERFACE
     def debug(self, message: str, context: Optional[Dict[str, Any]] = None) -> None:
@@ -128,5 +143,12 @@ class LoggerImpl:
 
     # PUBLIC_INTERFACE
     def flush(self) -> None:
-        """Flush pending log events; stdout export has no pending buffer."""
-        return None
+        """Flush pending output for the configured exporter."""
+        if self._file_transport is not None:
+            self._file_transport.flush()
+
+    # PUBLIC_INTERFACE
+    def close(self) -> None:
+        """Release resources held by the configured exporter."""
+        if self._file_transport is not None:
+            self._file_transport.close()
