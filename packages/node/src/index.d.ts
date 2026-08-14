@@ -1,5 +1,7 @@
 export * from './api/Logger';
 export * from './api/types';
 export * from './sdk/factory';
+export * from './sdk/HttpTransport';
 export * from './sdk/masking';
+export * from './sdk/OtlpTransport';
 export * from './sdk/validation';

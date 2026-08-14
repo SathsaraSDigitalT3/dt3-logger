@@ -192,6 +192,18 @@ export interface SdkConfig {
   /** HTTP request timeout in milliseconds.  Defaults to `5000`. */
   'exporter.http.timeout_ms'?: number;
 
+  /** Optional HTTP request headers for the HTTP exporter. */
+  'exporter.http.headers'?: Headers;
+
+  /** OTLP/HTTP Logs endpoint when exporter is `'otlp'`. */
+  'otlp.endpoint'?: string;
+
+  /** OTLP/HTTP request timeout in milliseconds. Defaults to `10000`. */
+  'otlp.timeout'?: number;
+
+  /** Optional request headers for the OTLP/HTTP exporter. */
+  'otlp.headers'?: Headers;
+
   /** Whether field masking is enabled.  Defaults to `true`. */
   'masking.enabled'?: boolean;
 

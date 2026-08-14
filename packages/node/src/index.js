@@ -17,5 +17,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 __exportStar(require("./api/Logger"), exports);
 __exportStar(require("./api/types"), exports);
 __exportStar(require("./sdk/factory"), exports);
+__exportStar(require("./sdk/HttpTransport"), exports);
 __exportStar(require("./sdk/masking"), exports);
+__exportStar(require("./sdk/OtlpTransport"), exports);
 __exportStar(require("./sdk/validation"), exports);

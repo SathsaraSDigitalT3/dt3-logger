@@ -1,6 +1,9 @@
 import { Logger } from '../../api/Logger';
-import { ValidationMode } from '../../api/types';
+import { Headers, LogEvent, ValidationMode } from '../../api/types';
+import { FileTransport } from '../FileTransport';
+import { HttpTransport } from '../HttpTransport';
 import { MaskingEngine } from '../masking';
+import { OtlpTransport } from '../OtlpTransport';
 import { LogEventValidator, ValidationError } from '../validation';
 
 /**
@@ -9,9 +12,13 @@ import { LogEventValidator, ValidationError } from '../validation';
 export class LoggerImpl implements Logger {
   private readonly config: Record<string, unknown>;
   private readonly exporter: string;
+  private readonly failOpen: boolean;
   private readonly validationMode: ValidationMode;
   private readonly maskingEngine: MaskingEngine;
   private readonly validator: LogEventValidator;
+  private readonly fileTransport?: FileTransport;
+  private readonly httpTransport?: HttpTransport;
+  private readonly otlpTransport?: OtlpTransport;
 
   /**
    * Create a logger from SDK configuration.
@@ -21,6 +28,33 @@ export class LoggerImpl implements Logger {
   constructor(config: Record<string, unknown>) {
     this.config = config;
     this.exporter = typeof config.exporter === 'string' ? config.exporter : 'stdout';
+    this.failOpen = config.fail_open !== false;
+    this.fileTransport =
+      this.exporter === 'file'
+        ? new FileTransport(
+            typeof config['exporter.file.path'] === 'string' ? config['exporter.file.path'] : '',
+          )
+        : undefined;
+    this.httpTransport =
+      this.exporter === 'http'
+        ? new HttpTransport(
+            typeof config['exporter.http.endpoint'] === 'string'
+              ? config['exporter.http.endpoint']
+              : '',
+            typeof config['exporter.http.timeout_ms'] === 'number'
+              ? config['exporter.http.timeout_ms']
+              : 5000,
+            this.resolveHttpHeaders(config['exporter.http.headers']),
+          )
+        : undefined;
+    this.otlpTransport =
+      this.exporter === 'otlp'
+        ? new OtlpTransport(
+            typeof config['otlp.endpoint'] === 'string' ? config['otlp.endpoint'] : '',
+            typeof config['otlp.timeout'] === 'number' ? config['otlp.timeout'] : 10000,
+            this.resolveOtlpHeaders(config['otlp.headers']),
+          )
+        : undefined;
     this.validationMode = this.resolveValidationMode(config['validation.mode']);
     this.maskingEngine = new MaskingEngine({
       sensitiveFields: Array.isArray(config['masking.fields'])
@@ -44,6 +78,38 @@ export class LoggerImpl implements Logger {
     }
 
     return normalizedMode as ValidationMode;
+  }
+
+  private resolveHttpHeaders(value: unknown): Headers | undefined {
+    if (value === undefined) {
+      return undefined;
+    }
+    if (value === null || Array.isArray(value) || typeof value !== 'object') {
+      throw new Error('exporter.http.headers must be a mapping of string header names to string values');
+    }
+
+    const headers = Object.entries(value);
+    if (headers.some(([, headerValue]) => typeof headerValue !== 'string')) {
+      throw new Error('exporter.http.headers must be a mapping of string header names to string values');
+    }
+
+    return Object.fromEntries(headers) as Headers;
+  }
+
+  private resolveOtlpHeaders(value: unknown): Headers | undefined {
+    if (value === undefined) {
+      return undefined;
+    }
+    if (value === null || Array.isArray(value) || typeof value !== 'object') {
+      throw new Error('otlp.headers must be a mapping of string header names to string values');
+    }
+
+    const headers = Object.entries(value);
+    if (headers.some(([, headerValue]) => typeof headerValue !== 'string')) {
+      throw new Error('otlp.headers must be a mapping of string header names to string values');
+    }
+
+    return Object.fromEntries(headers) as Headers;
   }
 
   private log(
@@ -104,6 +170,30 @@ export class LoggerImpl implements Logger {
 
     if (this.exporter === 'stdout') {
       console.log(JSON.stringify(maskedEvent));
+    } else if (this.exporter === 'file') {
+      try {
+        this.fileTransport?.export(maskedEvent as LogEvent);
+      } catch (error) {
+        if (!this.failOpen) {
+          throw error;
+        }
+      }
+    } else if (this.exporter === 'http') {
+      try {
+        this.httpTransport?.export(maskedEvent as LogEvent);
+      } catch (error) {
+        if (!this.failOpen) {
+          throw error;
+        }
+      }
+    } else if (this.exporter === 'otlp') {
+      try {
+        this.otlpTransport?.export(maskedEvent as LogEvent);
+      } catch (error) {
+        if (!this.failOpen) {
+          throw error;
+        }
+      }
     }
   }
 
@@ -154,9 +244,18 @@ export class LoggerImpl implements Logger {
 
   // PUBLIC_INTERFACE
   /**
-   * Flush pending log events. The stdout exporter has no buffered events.
+   * Flush pending log events. OTLP delivery settles asynchronously, while the
+   * remaining exporters preserve their existing synchronous flush behavior.
    */
-  public flush(): void {
-    // No-op for stdout.
+  public async flush(): Promise<void> {
+    this.fileTransport?.flush();
+    this.httpTransport?.flush();
+    try {
+      await this.otlpTransport?.flush();
+    } catch (error) {
+      if (!this.failOpen) {
+        throw error;
+      }
+    }
   }
 }

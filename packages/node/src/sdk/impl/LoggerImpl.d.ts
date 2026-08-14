@@ -5,9 +5,13 @@ import { Logger } from '../../api/Logger';
 export declare class LoggerImpl implements Logger {
     private readonly config;
     private readonly exporter;
+    private readonly failOpen;
     private readonly validationMode;
     private readonly maskingEngine;
     private readonly validator;
+    private readonly fileTransport?;
+    private readonly httpTransport?;
+    private readonly otlpTransport?;
     /**
      * Create a logger from SDK configuration.
      *
@@ -15,6 +19,8 @@ export declare class LoggerImpl implements Logger {
      */
     constructor(config: Record<string, unknown>);
     private resolveValidationMode;
+    private resolveHttpHeaders;
+    private resolveOtlpHeaders;
     private log;
     /**
      * Export a DEBUG log event.
@@ -46,7 +52,8 @@ export declare class LoggerImpl implements Logger {
      */
     error(message: string, error?: Error, context?: Record<string, unknown>): void;
     /**
-     * Flush pending log events. The stdout exporter has no buffered events.
+     * Flush pending log events. OTLP delivery settles asynchronously, while the
+     * remaining exporters preserve their existing synchronous flush behavior.
      */
-    flush(): void;
+    flush(): Promise<void>;
 }

@@ -42,6 +42,12 @@
     "exporter.file.path": { "type": "string" },
     "exporter.http.endpoint": { "type": "string" },
     "exporter.http.timeout_ms": { "type": "integer", "default": 5000 },
+    "otlp.endpoint": { "type": "string" },
+    "otlp.timeout": { "type": "integer", "default": 10000 },
+    "otlp.headers": {
+      "type": "object",
+      "additionalProperties": { "type": "string" }
+    },
     "masking.enabled": { "type": "boolean", "default": true },
     "masking.fields": {
       "type": "array",
