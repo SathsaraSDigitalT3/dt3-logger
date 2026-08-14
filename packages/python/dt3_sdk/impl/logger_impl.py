@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 from dt3_sdk.file_transport import FileTransport
+from dt3_sdk.http_transport import HttpTransport
 from dt3_sdk.masking import MaskingEngine
 from dt3_sdk.validation import LogEventValidator, ValidationError
 
@@ -20,12 +21,12 @@ class LoggerImpl:
 
         Args:
             config: SDK configuration including service metadata, masking settings,
-                validation mode, exporter selection, and file destination when the
-                ``file`` exporter is selected.
+                validation mode, exporter selection, and the corresponding exporter
+                destination settings.
 
         Raises:
-            ValueError: If an unsupported exporter is configured or a file exporter
-                is selected without ``file.path``.
+            ValueError: If an unsupported exporter is configured or required
+                exporter configuration is missing or invalid.
             OSError: If the configured file destination cannot be opened.
         """
         self.config = config
@@ -39,9 +40,16 @@ class LoggerImpl:
         )
         self.validator = LogEventValidator()
         self._file_transport: Optional[FileTransport] = None
+        self._http_transport: Optional[HttpTransport] = None
 
         if self.exporter == "file":
             self._file_transport = FileTransport(config.get("file.path", ""))
+        elif self.exporter == "http":
+            self._http_transport = HttpTransport(
+                endpoint=config.get("http.endpoint", ""),
+                timeout=config.get("http.timeout", 10.0),
+                headers=config.get("http.headers"),
+            )
         elif self.exporter != "stdout":
             raise ValueError(f"Unsupported exporter: {self.exporter}")
 
@@ -115,6 +123,8 @@ class LoggerImpl:
             print(json.dumps(masked_event))
         elif self._file_transport is not None:
             self._file_transport.export(masked_event)
+        elif self._http_transport is not None:
+            self._http_transport.export(masked_event)
 
     # PUBLIC_INTERFACE
     def debug(self, message: str, context: Optional[Dict[str, Any]] = None) -> None:
@@ -146,9 +156,13 @@ class LoggerImpl:
         """Flush pending output for the configured exporter."""
         if self._file_transport is not None:
             self._file_transport.flush()
+        if self._http_transport is not None:
+            self._http_transport.flush()
 
     # PUBLIC_INTERFACE
     def close(self) -> None:
         """Release resources held by the configured exporter."""
         if self._file_transport is not None:
             self._file_transport.close()
+        if self._http_transport is not None:
+            self._http_transport.close()

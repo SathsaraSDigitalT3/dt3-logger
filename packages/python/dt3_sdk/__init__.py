@@ -2,6 +2,7 @@
 
 from .factory import create_logger
 from .file_transport import FileTransport
+from .http_transport import HttpTransport, HttpTransportError
 from .masking import MaskingEngine
 from .validation import (
     LogEventValidator,
@@ -12,6 +13,8 @@ from .validation import (
 
 __all__ = [
     "FileTransport",
+    "HttpTransport",
+    "HttpTransportError",
     "LogEventValidator",
     "MaskingEngine",
     "ValidationError",
