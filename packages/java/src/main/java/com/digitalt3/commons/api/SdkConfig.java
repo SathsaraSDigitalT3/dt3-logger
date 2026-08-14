@@ -1,7 +1,9 @@
 package com.digitalt3.commons.api;
 
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * SDK configuration.
@@ -18,6 +20,13 @@ public class SdkConfig {
     private ValidationMode validationMode = ValidationMode.LENIENT;
     private boolean failOpen = true;
     private String exporter = "stdout";
+    private String filePath;
+    private String httpEndpoint;
+    private long httpTimeout = 5000;
+    private Map<String, String> httpHeaders = new LinkedHashMap<>();
+    private String otlpEndpoint;
+    private long otlpTimeout = 10000;
+    private Map<String, String> otlpHeaders = new LinkedHashMap<>();
     private boolean maskingEnabled = true;
     private List<String> maskingFields = new ArrayList<>();
     private String maskingReplacementValue = "[REDACTED]";
@@ -43,6 +52,91 @@ public class SdkConfig {
     public void setFailOpen(boolean failOpen) { this.failOpen = failOpen; }
     public String getExporter() { return exporter; }
     public void setExporter(String exporter) { this.exporter = exporter; }
+    public String getFilePath() { return filePath; }
+    public void setFilePath(String filePath) { this.filePath = filePath; }
+    public String getHttpEndpoint() { return httpEndpoint; }
+    public void setHttpEndpoint(String httpEndpoint) { this.httpEndpoint = httpEndpoint; }
+    /**
+     * Return the HTTP request timeout configured by {@code exporter.http.timeout}, in milliseconds.
+     *
+     * @return the configured HTTP timeout in milliseconds
+     */
+    public long getHttpTimeout() { return httpTimeout; }
+
+    /**
+     * Configure the HTTP request timeout for {@code exporter.http.timeout}, in milliseconds.
+     *
+     * @param httpTimeout timeout in milliseconds; it must be greater than zero when HTTP export is used
+     */
+    public void setHttpTimeout(long httpTimeout) { this.httpTimeout = httpTimeout; }
+
+    /**
+     * Return custom headers configured for HTTP event export.
+     *
+     * @return a defensive copy of header name/value pairs
+     */
+    public Map<String, String> getHttpHeaders() {
+        return Map.copyOf(httpHeaders);
+    }
+
+    /**
+     * Configure custom headers for HTTP event export.
+     *
+     * @param httpHeaders header name/value pairs; {@code null} clears configured headers
+     */
+    public void setHttpHeaders(Map<String, String> httpHeaders) {
+        this.httpHeaders = httpHeaders == null
+            ? new LinkedHashMap<>()
+            : new LinkedHashMap<>(httpHeaders);
+    }
+
+    /**
+     * Return the OTLP Logs endpoint configured by {@code otlp.endpoint}.
+     *
+     * @return the configured OTLP endpoint, or {@code null} when unset
+     */
+    public String getOtlpEndpoint() { return otlpEndpoint; }
+
+    /**
+     * Configure the OTLP Logs endpoint for {@code otlp.endpoint}.
+     *
+     * @param otlpEndpoint HTTP or HTTPS OTLP Logs endpoint, commonly ending in {@code /v1/logs}
+     */
+    public void setOtlpEndpoint(String otlpEndpoint) { this.otlpEndpoint = otlpEndpoint; }
+
+    /**
+     * Return the OTLP request timeout configured by {@code otlp.timeout}, in milliseconds.
+     *
+     * @return the configured OTLP timeout in milliseconds
+     */
+    public long getOtlpTimeout() { return otlpTimeout; }
+
+    /**
+     * Configure the OTLP request timeout for {@code otlp.timeout}, in milliseconds.
+     *
+     * @param otlpTimeout timeout in milliseconds; it must be greater than zero when OTLP export is used
+     */
+    public void setOtlpTimeout(long otlpTimeout) { this.otlpTimeout = otlpTimeout; }
+
+    /**
+     * Return custom headers configured for OTLP export.
+     *
+     * @return a defensive copy of OTLP header name/value pairs
+     */
+    public Map<String, String> getOtlpHeaders() {
+        return Map.copyOf(otlpHeaders);
+    }
+
+    /**
+     * Configure custom headers for OTLP export.
+     *
+     * @param otlpHeaders header name/value pairs; {@code null} clears configured headers
+     */
+    public void setOtlpHeaders(Map<String, String> otlpHeaders) {
+        this.otlpHeaders = otlpHeaders == null
+            ? new LinkedHashMap<>()
+            : new LinkedHashMap<>(otlpHeaders);
+    }
     public boolean isMaskingEnabled() { return maskingEnabled; }
     public void setMaskingEnabled(boolean maskingEnabled) { this.maskingEnabled = maskingEnabled; }
 

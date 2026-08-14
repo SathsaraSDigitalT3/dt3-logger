@@ -134,7 +134,10 @@ public class LogEvent {
         if (errorStack != null) map.put("error.stack", errorStack);
         if (errorCode != null) map.put("error.code", errorCode);
         if (errorRetryable != null) map.put("error.retryable", errorRetryable);
-        if (attributes != null) map.put("attributes", attributes);
+        if (attributes != null) {
+            map.put("attributes", attributes);
+            map.putAll(attributes);
+        }
         if (validationErrors != null) map.put("dt3.validation.errors", validationErrors);
         if (maskedFields != null) map.put("dt3.security.masked_fields", maskedFields);
         return map;

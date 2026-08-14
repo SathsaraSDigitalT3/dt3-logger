@@ -210,11 +210,30 @@ final class MapEventValidator {
 
         String instanceLocation = validationMessage.getInstanceLocation().toString();
         if (instanceLocation == null || instanceLocation.isEmpty() || "/".equals(instanceLocation)) {
-            return "$";
+            return presentNullRequiredProperty(event);
         }
 
         String instanceField = decodeInstanceLocation(instanceLocation);
         return event.containsKey(instanceField) ? instanceField : "$";
+    }
+
+    /**
+     * Identify a required field that is present with a null value.
+     *
+     * <p>Some JSON Schema validators report a null type violation at the root
+     * instance location. The canonical required-property order gives the logger
+     * a stable, non-sensitive field label for that diagnostic.</p>
+     *
+     * @param event final flat event map being validated
+     * @return the first required field with a null value, or {@code $} if none exists
+     */
+    private String presentNullRequiredProperty(Map<String, Object> event) {
+        for (String requiredProperty : CANONICAL_SCHEMA.requiredProperties()) {
+            if (event.containsKey(requiredProperty) && event.get(requiredProperty) == null) {
+                return requiredProperty;
+            }
+        }
+        return "$";
     }
 
     private String decodeInstanceLocation(String instanceLocation) {

@@ -15,10 +15,11 @@ import java.util.Map;
 import java.util.Objects;
 
 /**
- * Synchronous logger that builds masked structured events and writes JSON to stdout.
+ * Synchronous logger that builds, masks, validates, and exports structured events.
  *
- * <p>Only stdout export is supported in the current cross-language baseline.
- * Calls are synchronous, so {@link #flush()} delegates directly to stdout.</p>
+ * <p>Despite its retained historical name, this implementation supports the
+ * configured stdout and file exporters. The processing order is canonical event
+ * creation, masking, validation, then transport delivery.</p>
  *
  * @since 0.1.0
  */
@@ -29,11 +30,16 @@ public final class StdoutLogger implements Logger {
     private final SdkConfig config;
     private final RecursiveMaskingEngine maskingEngine;
     private final MapEventValidator eventValidator;
+    private final FileTransport fileTransport;
+    private final HttpTransport httpTransport;
+    private final OtlpTransport otlpTransport;
 
     /**
-     * Create a logger from SDK metadata and supported masking settings.
+     * Create a logger from SDK metadata and supported masking/export settings.
      *
      * @param config SDK configuration
+     * @throws IllegalArgumentException if exporter configuration is unsupported
+     *     or the file exporter has no destination path
      */
     public StdoutLogger(SdkConfig config) {
         this.config = Objects.requireNonNull(config, "config must not be null");
@@ -44,6 +50,9 @@ public final class StdoutLogger implements Logger {
             config.isMaskingEnabled()
         );
         this.eventValidator = new MapEventValidator();
+        this.fileTransport = createFileTransport(config);
+        this.httpTransport = createHttpTransport(config);
+        this.otlpTransport = createOtlpTransport(config);
     }
 
     // PUBLIC_INTERFACE
@@ -97,11 +106,74 @@ public final class StdoutLogger implements Logger {
 
     // PUBLIC_INTERFACE
     /**
-     * Flush stdout. Events are emitted synchronously and require no buffering.
+     * Flush the configured synchronous transport.
      */
     @Override
     public void flush() {
+        if (fileTransport != null) {
+            try {
+                fileTransport.flush();
+            } catch (RuntimeException exception) {
+                handleTransportFailure(exception);
+            }
+            return;
+        }
+        if (httpTransport != null) {
+            try {
+                httpTransport.flush();
+            } catch (RuntimeException exception) {
+                handleTransportFailure(exception);
+            }
+            return;
+        }
+        if (otlpTransport != null) {
+            try {
+                otlpTransport.flush();
+            } catch (RuntimeException exception) {
+                handleTransportFailure(exception);
+            }
+            return;
+        }
+
         System.out.flush();
+    }
+
+    private FileTransport createFileTransport(SdkConfig sdkConfig) {
+        String exporter = sdkConfig.getExporter();
+        if (exporter == null || exporter.trim().isEmpty() || "stdout".equalsIgnoreCase(exporter)) {
+            return null;
+        }
+        if ("file".equalsIgnoreCase(exporter)) {
+            return new FileTransport(sdkConfig.getFilePath());
+        }
+        if ("http".equalsIgnoreCase(exporter)) {
+            return null;
+        }
+        if ("otlp".equalsIgnoreCase(exporter)) {
+            return null;
+        }
+
+        throw new IllegalArgumentException("Unsupported exporter: " + exporter);
+    }
+
+    private HttpTransport createHttpTransport(SdkConfig sdkConfig) {
+        return "http".equalsIgnoreCase(sdkConfig.getExporter())
+            ? new HttpTransport(
+                sdkConfig.getHttpEndpoint(),
+                sdkConfig.getHttpTimeout(),
+                sdkConfig.getHttpHeaders()
+            )
+            : null;
+    }
+
+    private OtlpTransport createOtlpTransport(SdkConfig sdkConfig) {
+        return "otlp".equalsIgnoreCase(sdkConfig.getExporter())
+            ? new OtlpTransport(
+                sdkConfig.getOtlpEndpoint(),
+                sdkConfig.getOtlpTimeout(),
+                sdkConfig.getOtlpHeaders()
+            )
+            : null;
     }
 
     private void log(String severity, String message, Map<String, Object> context, Throwable error) {
@@ -139,13 +211,37 @@ public final class StdoutLogger implements Logger {
                 );
             }
 
-            System.out.println(toJson(maskedEvent));
+            writeFinalEvent(maskedEvent);
         } catch (IllegalArgumentException validationException) {
             if (validationMode == ValidationMode.STRICT) {
                 throw validationException;
             }
-        } catch (RuntimeException ignored) {
-            // Logging is fail-open: the host application must not fail because logging failed.
+        } catch (RuntimeException exception) {
+            handleTransportFailure(exception);
+        }
+    }
+
+    private void writeFinalEvent(Map<String, Object> finalEvent) {
+        String serializedEvent = toJson(finalEvent);
+        if (fileTransport != null) {
+            fileTransport.writeJson(serializedEvent);
+            return;
+        }
+        if (httpTransport != null) {
+            httpTransport.writeJson(serializedEvent);
+            return;
+        }
+        if (otlpTransport != null) {
+            otlpTransport.writeEventMap(finalEvent);
+            return;
+        }
+
+        System.out.println(serializedEvent);
+    }
+
+    private void handleTransportFailure(RuntimeException exception) {
+        if (!config.isFailOpen()) {
+            throw exception;
         }
     }
 
@@ -201,6 +297,8 @@ public final class StdoutLogger implements Logger {
             event.put("deployment.environment", config.getDeploymentEnvironment());
         }
         event.putAll(safeContext);
+        // Caller context may add custom attributes but must not override logger-selected severity.
+        event.put("severity", severity);
 
         if (error != null) {
             event.put("error.type", error.getClass().getSimpleName());
@@ -221,7 +319,7 @@ public final class StdoutLogger implements Logger {
         return writer.toString();
     }
 
-    private String toJson(Object value) {
+    static String toJson(Object value) {
         if (value == null) {
             return "null";
         }
@@ -262,7 +360,7 @@ public final class StdoutLogger implements Logger {
         return toJson(String.valueOf(value));
     }
 
-    private String escapeJson(String value) {
+    private static String escapeJson(String value) {
         StringBuilder escaped = new StringBuilder(value.length() + 16);
         for (int index = 0; index < value.length(); index++) {
             char character = value.charAt(index);

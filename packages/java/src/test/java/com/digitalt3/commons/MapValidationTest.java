@@ -50,6 +50,12 @@ public class MapValidationTest {
 
     @Test
     public void presentNullRequiredPropertyIsRejectedAsStructuredTypeError() {
+        // "severity" is intentionally excluded from this test: the logger method always
+        // controls severity and overwrites any caller-supplied null value before validation.
+        // That canonical behavior is verified separately in loggerMethodSeverityCannotBeOverriddenByCallerContext.
+        //
+        // All other required fields can be null-overridden via caller context and therefore
+        // generate a genuine "type" diagnostic without triggering a "required" diagnostic.
         for (String field : requiredFields()) {
             Map<String, Object> context = new LinkedHashMap<>();
             context.put(field, null);
@@ -67,6 +73,44 @@ public class MapValidationTest {
                 output.contains("\"" + field + "\":\"[REDACTED]\"")
             );
         }
+    }
+
+    @Test
+    public void loggerMethodSeverityCannotBeOverriddenByCallerContext() {
+        // Regression test: severity is always set by the logger method and cannot be
+        // overridden by a null or non-null caller-supplied value in the context map.
+        // logger.info() with Map.of("severity", null) must produce severity = INFO (no error).
+        Map<String, Object> nullSeverityContext = new LinkedHashMap<>();
+        nullSeverityContext.put("event.name", "SEVERITY_NULL_TEST");
+        nullSeverityContext.put("severity", null);
+
+        String nullOutput = emit(ValidationMode.LENIENT, nullSeverityContext);
+
+        // No validation error expected: severity is always "INFO" from the logger method
+        assertFalse(
+            "severity=null from caller must not produce validation diagnostics (logger overrides it)",
+            nullOutput.contains("\"dt3.validation.errors\"")
+        );
+        assertTrue(
+            "Severity must remain INFO regardless of caller null",
+            nullOutput.contains("\"severity\":\"INFO\"")
+        );
+
+        // logger.info() with Map.of("severity", "ERROR") must also produce INFO severity
+        Map<String, Object> errorSeverityContext = new LinkedHashMap<>();
+        errorSeverityContext.put("event.name", "SEVERITY_OVERRIDE_TEST");
+        errorSeverityContext.put("severity", "ERROR");
+
+        String errorOutput = emit(ValidationMode.LENIENT, errorSeverityContext);
+
+        assertFalse(
+            "severity=ERROR from caller must not produce validation diagnostics (logger overrides to INFO)",
+            errorOutput.contains("\"dt3.validation.errors\"")
+        );
+        assertTrue(
+            "Severity must remain INFO regardless of caller-supplied ERROR",
+            errorOutput.contains("\"severity\":\"INFO\"")
+        );
     }
 
     @Test
@@ -281,9 +325,13 @@ public class MapValidationTest {
     }
 
     private String[] requiredFields() {
+        // "severity" is intentionally excluded: the logger method always controls severity
+        // and overwrites any caller-supplied null before validation runs. This means a
+        // caller-supplied null severity never reaches the validator, so testing it here
+        // would test the wrong invariant. The logger severity override is tested in
+        // loggerMethodSeverityCannotBeOverriddenByCallerContext().
         return new String[] {
             "timestamp",
-            "severity",
             "message",
             "event.name",
             "schema.version",

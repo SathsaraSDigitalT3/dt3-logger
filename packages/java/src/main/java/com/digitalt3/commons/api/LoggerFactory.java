@@ -7,9 +7,10 @@ import java.util.Objects;
 /**
  * Creates the supported DT3 Commons Java logger implementation.
  *
- * <p>The current SDK baseline supports synchronous structured JSON export to
- * stdout only. Other exporters, validation modes, and batching are intentionally
- * not implemented in this phase.</p>
+ * <p>The SDK supports synchronous structured JSON export to stdout,
+ * append-only JSON Lines export to a configured file, synchronous HTTP POST
+ * export to a configured endpoint, and synchronous OTLP/HTTP JSON Logs
+ * export to a configured OTLP endpoint.</p>
  *
  * @since 0.1.0
  */
@@ -23,8 +24,8 @@ public final class LoggerFactory {
     /**
      * Create a logger using the supplied SDK configuration.
      *
-     * @param config service metadata and supported masking configuration
-     * @return a synchronous structured stdout logger
+     * @param config service metadata, masking configuration, and stdout, file, HTTP, or OTLP exporter settings
+     * @return a synchronous structured logger for the configured exporter
      */
     public static Logger createLogger(SdkConfig config) {
         return new StdoutLogger(Objects.requireNonNull(config, "config must not be null"));
