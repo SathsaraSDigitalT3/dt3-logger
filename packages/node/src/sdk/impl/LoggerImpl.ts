@@ -1,17 +1,26 @@
 import { Logger } from '../../api/Logger';
-import { ValidationMode } from '../../api/types';
+import { Headers, LogContext, LogEvent, ValidationMode } from '../../api/types';
+import { FileTransport } from '../FileTransport';
+import { HttpTransport } from '../HttpTransport';
+import { getActiveLogContext, withLogContext } from '../context';
 import { MaskingEngine } from '../masking';
+import { OtlpTransport } from '../OtlpTransport';
 import { LogEventValidator, ValidationError } from '../validation';
 
 /**
- * Concrete DT3 logger that builds structured events and exports them to stdout.
+ * Concrete DT3 logger that builds, validates, and exports structured events.
  */
 export class LoggerImpl implements Logger {
   private readonly config: Record<string, unknown>;
   private readonly exporter: string;
+  private readonly failOpen: boolean;
   private readonly validationMode: ValidationMode;
   private readonly maskingEngine: MaskingEngine;
   private readonly validator: LogEventValidator;
+  private readonly fileTransport?: FileTransport;
+  private readonly httpTransport?: HttpTransport;
+  private readonly otlpTransport?: OtlpTransport;
+  private closed = false;
 
   /**
    * Create a logger from SDK configuration.
@@ -21,6 +30,31 @@ export class LoggerImpl implements Logger {
   constructor(config: Record<string, unknown>) {
     this.config = config;
     this.exporter = typeof config.exporter === 'string' ? config.exporter : 'stdout';
+    this.failOpen = config.fail_open !== false;
+    this.fileTransport =
+      this.exporter === 'file'
+        ? new FileTransport(
+            typeof config['exporter.file.path'] === 'string' ? config['exporter.file.path'] : '',
+          )
+        : undefined;
+    this.httpTransport =
+      this.exporter === 'http'
+        ? new HttpTransport(
+            typeof config['exporter.http.endpoint'] === 'string'
+              ? config['exporter.http.endpoint']
+              : '',
+            this.resolveHttpTimeout(config),
+            this.resolveHeaders(config['exporter.http.headers'], 'exporter.http.headers'),
+          )
+        : undefined;
+    this.otlpTransport =
+      this.exporter === 'otlp'
+        ? new OtlpTransport(
+            typeof config['otlp.endpoint'] === 'string' ? config['otlp.endpoint'] : '',
+            typeof config['otlp.timeout'] === 'number' ? config['otlp.timeout'] : 10000,
+            this.resolveHeaders(config['otlp.headers'], 'otlp.headers'),
+          )
+        : undefined;
     this.validationMode = this.resolveValidationMode(config['validation.mode']);
     this.maskingEngine = new MaskingEngine({
       sensitiveFields: Array.isArray(config['masking.fields'])
@@ -46,16 +80,81 @@ export class LoggerImpl implements Logger {
     return normalizedMode as ValidationMode;
   }
 
+  private resolveHttpTimeout(config: Record<string, unknown>): number {
+    const canonicalTimeout = config['exporter.http.timeout'];
+    const legacyTimeout = config['exporter.http.timeout_ms'];
+
+    if (canonicalTimeout !== undefined) {
+      if (typeof canonicalTimeout !== 'number') {
+        throw new Error('exporter.http.timeout must be a number of milliseconds');
+      }
+      return canonicalTimeout;
+    }
+
+    if (legacyTimeout !== undefined) {
+      if (typeof legacyTimeout !== 'number') {
+        throw new Error('exporter.http.timeout_ms must be a number of milliseconds');
+      }
+      return legacyTimeout;
+    }
+
+    return 5000;
+  }
+
+  private resolveHeaders(value: unknown, key: string): Headers | undefined {
+    if (value === undefined) {
+      return undefined;
+    }
+    if (value === null || Array.isArray(value) || typeof value !== 'object') {
+      throw new Error(`${key} must be a mapping of safe string header names to string values`);
+    }
+
+    const headers = Object.entries(value);
+    if (
+      headers.some(
+        ([name, headerValue]) =>
+          name.trim().length === 0 ||
+          /[\r\n]/.test(name) ||
+          typeof headerValue !== 'string' ||
+          /[\r\n]/.test(headerValue),
+      )
+    ) {
+      throw new Error(`${key} must be a mapping of safe string header names to string values`);
+    }
+
+    return Object.fromEntries(headers) as Headers;
+  }
+
+  private ensureOpen(): void {
+    if (this.closed) {
+      throw new Error('Logger is closed');
+    }
+  }
+
+  private handleDeliveryFailure(error: unknown): void {
+    if (!this.failOpen) {
+      throw error;
+    }
+  }
+
   private log(
     level: string,
     message: string,
     context?: Record<string, unknown>,
     error?: Error,
   ): void {
-    const eventName =
-      typeof context?.['event.name'] === 'string' ? context['event.name'] : 'GENERIC_EVENT';
+    this.ensureOpen();
 
-    const logEvent: Record<string, unknown> = {
+    // Explicit event context intentionally overrides values inherited from the
+    // active execution scope. Logger-owned fields are asserted below.
+    const callerContext = { ...getActiveLogContext(), ...context };
+    const eventName =
+      typeof callerContext['event.name'] === 'string' ? callerContext['event.name'] : 'GENERIC_EVENT';
+    const logEvent: Record<string, unknown> = { ...callerContext };
+
+    // The logger owns these fields; setting them after context prevents caller
+    // input from overriding method-selected severity or logger metadata.
+    Object.assign(logEvent, {
       timestamp: new Date().toISOString(),
       severity: level,
       message,
@@ -64,12 +163,8 @@ export class LoggerImpl implements Logger {
         typeof this.config['schema.version'] === 'string' ? this.config['schema.version'] : '1.0.0',
       'sdk.name': typeof this.config['sdk.name'] === 'string' ? this.config['sdk.name'] : '@digitalt3/commons',
       'sdk.version': typeof this.config['sdk.version'] === 'string' ? this.config['sdk.version'] : '0.1.0',
-      ...context,
-    };
+    });
 
-    // Required service metadata is copied only when supplied. This lets schema
-    // validation accurately report missing fields instead of hiding them behind
-    // synthetic "unknown" values.
     for (const field of ['service.name', 'service.version', 'deployment.environment'] as const) {
       if (typeof this.config[field] === 'string') {
         logEvent[field] = this.config[field];
@@ -82,8 +177,6 @@ export class LoggerImpl implements Logger {
       logEvent['error.stack'] = error.stack;
     }
 
-    // The repository contract requires masking before validation so validation
-    // handling cannot expose caller-supplied sensitive values.
     const maskedResult = this.maskingEngine.mask(logEvent);
     const maskedEvent = maskedResult.data;
 
@@ -102,8 +195,18 @@ export class LoggerImpl implements Logger {
       }
     }
 
-    if (this.exporter === 'stdout') {
-      console.log(JSON.stringify(maskedEvent));
+    try {
+      if (this.exporter === 'stdout') {
+        console.log(JSON.stringify(maskedEvent));
+      } else if (this.exporter === 'file') {
+        this.fileTransport?.export(maskedEvent as LogEvent);
+      } else if (this.exporter === 'http') {
+        this.httpTransport?.export(maskedEvent as LogEvent);
+      } else if (this.exporter === 'otlp') {
+        this.otlpTransport?.export(maskedEvent as LogEvent);
+      }
+    } catch (deliveryError) {
+      this.handleDeliveryFailure(deliveryError);
     }
   }
 
@@ -116,6 +219,19 @@ export class LoggerImpl implements Logger {
    */
   public debug(message: string, context?: Record<string, unknown>): void {
     this.log('DEBUG', message, context);
+  }
+
+  // PUBLIC_INTERFACE
+  /**
+   * Run a callback with trace and correlation context attached to all logs
+   * created in the callback's execution scope.
+   *
+   * @param context - Convenience trace and correlation identifiers.
+   * @param callback - Synchronous or asynchronous work to run in the scope.
+   * @returns The callback result.
+   */
+  public withContext<T>(context: LogContext, callback: () => T): T {
+    return withLogContext(context, callback);
   }
 
   // PUBLIC_INTERFACE
@@ -154,9 +270,37 @@ export class LoggerImpl implements Logger {
 
   // PUBLIC_INTERFACE
   /**
-   * Flush pending log events. The stdout exporter has no buffered events.
+   * Settle delivery work initiated before the flush boundary.
+   *
+   * @returns A promise that rejects only when a delivery failure is configured
+   * to fail closed.
    */
-  public flush(): void {
-    // No-op for stdout.
+  public async flush(): Promise<void> {
+    this.ensureOpen();
+
+    try {
+      this.fileTransport?.flush();
+      await this.httpTransport?.flush();
+      await this.otlpTransport?.flush();
+    } catch (error) {
+      this.handleDeliveryFailure(error);
+    }
+  }
+
+  // PUBLIC_INTERFACE
+  /**
+   * Close the logger and its active transport.
+   *
+   * Closing is idempotent. Subsequent logging and flush calls fail with a
+   * documented terminal-state error.
+   */
+  public close(): void {
+    if (this.closed) {
+      return;
+    }
+
+    this.closed = true;
+    this.httpTransport?.close();
+    this.otlpTransport?.close();
   }
 }

@@ -1,7 +1,9 @@
 package com.digitalt3.commons.api;
 
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * SDK configuration.
@@ -18,10 +20,205 @@ public class SdkConfig {
     private ValidationMode validationMode = ValidationMode.LENIENT;
     private boolean failOpen = true;
     private String exporter = "stdout";
+    private String filePath;
+    private String httpEndpoint;
+    private long httpTimeout = 5000;
+    private Map<String, String> httpHeaders = new LinkedHashMap<>();
+    private String otlpEndpoint;
+    private long otlpTimeout = 10000;
+    private Map<String, String> otlpHeaders = new LinkedHashMap<>();
     private boolean maskingEnabled = true;
     private List<String> maskingFields = new ArrayList<>();
     private String maskingReplacementValue = "[REDACTED]";
     private boolean maskingTrackMaskedFields;
+
+    // PUBLIC_INTERFACE
+    /**
+     * Create SDK configuration from canonical dot-keyed values.
+     *
+     * <p>Canonical keys take precedence over legacy aliases. Supported aliases
+     * are {@code file.path}, {@code http.endpoint}, {@code http.timeout}, and
+     * {@code http.headers}; they are retained only for compatibility. Timeouts
+     * supplied through either key form are milliseconds.</p>
+     *
+     * @param values configuration values keyed by canonical dot-key names
+     * @return populated SDK configuration
+     * @throws IllegalArgumentException when a recognized value has the wrong type
+     */
+    public static SdkConfig fromMap(Map<String, ?> values) {
+        SdkConfig config = new SdkConfig();
+        config.apply(values);
+        return config;
+    }
+
+    // PUBLIC_INTERFACE
+    /**
+     * Apply canonical dot-keyed configuration values to this instance.
+     *
+     * <p>Canonical values win whenever both canonical and supported legacy
+     * aliases are supplied. Unknown keys are ignored so callers can share a
+     * configuration map across SDK versions.</p>
+     *
+     * @param values configuration values keyed by canonical dot-key names
+     * @throws IllegalArgumentException when a recognized value has the wrong type
+     */
+    public void apply(Map<String, ?> values) {
+        if (values == null) {
+            return;
+        }
+
+        setStringIfPresent(values, "service.name", this::setServiceName);
+        setStringIfPresent(values, "service.version", this::setServiceVersion);
+        setStringIfPresent(values, "deployment.environment", this::setDeploymentEnvironment);
+        setStringIfPresent(values, "schema.version", this::setSchemaVersion);
+        setStringIfPresent(values, "sdk.name", this::setSdkName);
+        setStringIfPresent(values, "sdk.version", this::setSdkVersion);
+        setStringIfPresent(values, "exporter", this::setExporter);
+        setStringIfPresent(
+            values,
+            preferredKey(values, "exporter.file.path", "file.path"),
+            this::setFilePath
+        );
+        setStringIfPresent(
+            values,
+            preferredKey(values, "exporter.http.endpoint", "http.endpoint"),
+            this::setHttpEndpoint
+        );
+        setLongIfPresent(
+            values,
+            preferredKey(values, "exporter.http.timeout", "http.timeout"),
+            this::setHttpTimeout
+        );
+        setHeadersIfPresent(
+            values,
+            preferredKey(values, "exporter.http.headers", "http.headers"),
+            this::setHttpHeaders
+        );
+        setStringIfPresent(values, "otlp.endpoint", this::setOtlpEndpoint);
+        setLongIfPresent(values, "otlp.timeout", this::setOtlpTimeout);
+        setHeadersIfPresent(values, "otlp.headers", this::setOtlpHeaders);
+        setBooleanIfPresent(values, "masking.enabled", this::setMaskingEnabled);
+        setStringListIfPresent(values, "masking.fields", this::setMaskingFields);
+
+        Object failOpenValue = values.get("fail_open");
+        if (failOpenValue != null) {
+            if (!(failOpenValue instanceof Boolean booleanValue)) {
+                throw new IllegalArgumentException("fail_open must be a boolean");
+            }
+            setFailOpen(booleanValue);
+        }
+
+        Object validationModeValue = values.get("validation.mode");
+        if (validationModeValue != null) {
+            if (!(validationModeValue instanceof String modeName)) {
+                throw new IllegalArgumentException("validation.mode must be a string");
+            }
+            try {
+                setValidationMode(ValidationMode.valueOf(modeName.toUpperCase()));
+            } catch (IllegalArgumentException exception) {
+                throw new IllegalArgumentException(
+                    "validation.mode must be STRICT, LENIENT, or OFF",
+                    exception
+                );
+            }
+        }
+    }
+
+    private static String preferredKey(Map<String, ?> values, String canonicalKey, String legacyKey) {
+        return values.containsKey(canonicalKey) ? canonicalKey : legacyKey;
+    }
+
+    private void setStringIfPresent(
+        Map<String, ?> values,
+        String key,
+        java.util.function.Consumer<String> setter
+    ) {
+        Object value = values.get(key);
+        if (value == null) {
+            return;
+        }
+        if (!(value instanceof String stringValue)) {
+            throw new IllegalArgumentException(key + " must be a string");
+        }
+        setter.accept(stringValue);
+    }
+
+    private void setLongIfPresent(
+        Map<String, ?> values,
+        String key,
+        java.util.function.LongConsumer setter
+    ) {
+        Object value = values.get(key);
+        if (value == null) {
+            return;
+        }
+        if (!(value instanceof Number numberValue)) {
+            throw new IllegalArgumentException(key + " must be a number of milliseconds");
+        }
+        setter.accept(numberValue.longValue());
+    }
+
+    private void setBooleanIfPresent(
+        Map<String, ?> values,
+        String key,
+        java.util.function.Consumer<Boolean> setter
+    ) {
+        Object value = values.get(key);
+        if (value == null) {
+            return;
+        }
+        if (!(value instanceof Boolean booleanValue)) {
+            throw new IllegalArgumentException(key + " must be a boolean");
+        }
+        setter.accept(booleanValue);
+    }
+
+    private void setStringListIfPresent(
+        Map<String, ?> values,
+        String key,
+        java.util.function.Consumer<List<String>> setter
+    ) {
+        Object value = values.get(key);
+        if (value == null) {
+            return;
+        }
+        if (!(value instanceof List<?> rawFields)) {
+            throw new IllegalArgumentException(key + " must be a list of strings");
+        }
+
+        List<String> fields = new ArrayList<>();
+        for (Object field : rawFields) {
+            if (!(field instanceof String stringField)) {
+                throw new IllegalArgumentException(key + " must be a list of strings");
+            }
+            fields.add(stringField);
+        }
+        setter.accept(fields);
+    }
+
+    @SuppressWarnings("unchecked")
+    private void setHeadersIfPresent(
+        Map<String, ?> values,
+        String key,
+        java.util.function.Consumer<Map<String, String>> setter
+    ) {
+        Object value = values.get(key);
+        if (value == null) {
+            return;
+        }
+        if (!(value instanceof Map<?, ?> rawHeaders)) {
+            throw new IllegalArgumentException(key + " must be a map of string values");
+        }
+
+        Map<String, String> headers = new LinkedHashMap<>();
+        for (Map.Entry<?, ?> entry : rawHeaders.entrySet()) {
+            if (!(entry.getKey() instanceof String name) || !(entry.getValue() instanceof String headerValue)) {
+                throw new IllegalArgumentException(key + " must be a map of string values");
+            }
+            headers.put(name, headerValue);
+        }
+        setter.accept(headers);
+    }
 
     public String getServiceName() { return serviceName; }
     public void setServiceName(String serviceName) { this.serviceName = serviceName; }
@@ -43,6 +240,91 @@ public class SdkConfig {
     public void setFailOpen(boolean failOpen) { this.failOpen = failOpen; }
     public String getExporter() { return exporter; }
     public void setExporter(String exporter) { this.exporter = exporter; }
+    public String getFilePath() { return filePath; }
+    public void setFilePath(String filePath) { this.filePath = filePath; }
+    public String getHttpEndpoint() { return httpEndpoint; }
+    public void setHttpEndpoint(String httpEndpoint) { this.httpEndpoint = httpEndpoint; }
+    /**
+     * Return the HTTP request timeout configured by {@code exporter.http.timeout}, in milliseconds.
+     *
+     * @return the configured HTTP timeout in milliseconds
+     */
+    public long getHttpTimeout() { return httpTimeout; }
+
+    /**
+     * Configure the HTTP request timeout for {@code exporter.http.timeout}, in milliseconds.
+     *
+     * @param httpTimeout timeout in milliseconds; it must be greater than zero when HTTP export is used
+     */
+    public void setHttpTimeout(long httpTimeout) { this.httpTimeout = httpTimeout; }
+
+    /**
+     * Return custom headers configured for HTTP event export.
+     *
+     * @return a defensive copy of header name/value pairs
+     */
+    public Map<String, String> getHttpHeaders() {
+        return Map.copyOf(httpHeaders);
+    }
+
+    /**
+     * Configure custom headers for HTTP event export.
+     *
+     * @param httpHeaders header name/value pairs; {@code null} clears configured headers
+     */
+    public void setHttpHeaders(Map<String, String> httpHeaders) {
+        this.httpHeaders = httpHeaders == null
+            ? new LinkedHashMap<>()
+            : new LinkedHashMap<>(httpHeaders);
+    }
+
+    /**
+     * Return the OTLP Logs endpoint configured by {@code otlp.endpoint}.
+     *
+     * @return the configured OTLP endpoint, or {@code null} when unset
+     */
+    public String getOtlpEndpoint() { return otlpEndpoint; }
+
+    /**
+     * Configure the OTLP Logs endpoint for {@code otlp.endpoint}.
+     *
+     * @param otlpEndpoint HTTP or HTTPS OTLP Logs endpoint, commonly ending in {@code /v1/logs}
+     */
+    public void setOtlpEndpoint(String otlpEndpoint) { this.otlpEndpoint = otlpEndpoint; }
+
+    /**
+     * Return the OTLP request timeout configured by {@code otlp.timeout}, in milliseconds.
+     *
+     * @return the configured OTLP timeout in milliseconds
+     */
+    public long getOtlpTimeout() { return otlpTimeout; }
+
+    /**
+     * Configure the OTLP request timeout for {@code otlp.timeout}, in milliseconds.
+     *
+     * @param otlpTimeout timeout in milliseconds; it must be greater than zero when OTLP export is used
+     */
+    public void setOtlpTimeout(long otlpTimeout) { this.otlpTimeout = otlpTimeout; }
+
+    /**
+     * Return custom headers configured for OTLP export.
+     *
+     * @return a defensive copy of OTLP header name/value pairs
+     */
+    public Map<String, String> getOtlpHeaders() {
+        return Map.copyOf(otlpHeaders);
+    }
+
+    /**
+     * Configure custom headers for OTLP export.
+     *
+     * @param otlpHeaders header name/value pairs; {@code null} clears configured headers
+     */
+    public void setOtlpHeaders(Map<String, String> otlpHeaders) {
+        this.otlpHeaders = otlpHeaders == null
+            ? new LinkedHashMap<>()
+            : new LinkedHashMap<>(otlpHeaders);
+    }
     public boolean isMaskingEnabled() { return maskingEnabled; }
     public void setMaskingEnabled(boolean maskingEnabled) { this.maskingEnabled = maskingEnabled; }
 

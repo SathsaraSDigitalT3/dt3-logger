@@ -1,0 +1,72 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://digitalt3.com/schemas/log-event/1.0.0",
+  "title": "DT3 Commons Log Event",
+  "description": "Canonical structured log event for the DT3 Commons Platform SDK",
+  "type": "object",
+  "required": [
+    "timestamp",
+    "severity",
+    "message",
+    "event.name",
+    "schema.version",
+    "sdk.name",
+    "sdk.version",
+    "service.name",
+    "service.version",
+    "deployment.environment"
+  ],
+  "properties": {
+    "timestamp": { "type": "string", "format": "date-time", "description": "ISO 8601 timestamp of the event" },
+    "severity": { "type": "string", "enum": ["DEBUG", "INFO", "WARN", "ERROR", "FATAL"], "description": "Log severity level" },
+    "message": { "type": "string", "minLength": 1, "description": "Human-readable log message" },
+    "event.name": { "type": "string", "pattern": "^[A-Z][A-Z0-9_]*$", "description": "Structured event name in UPPER_SNAKE_CASE" },
+    "schema.version": { "type": "string", "pattern": "^\\d+\\.\\d+\\.\\d+$", "description": "Schema version (semver)" },
+    "sdk.name": { "type": "string", "description": "SDK package name" },
+    "sdk.version": { "type": "string", "pattern": "^\\d+\\.\\d+\\.\\d+$", "description": "SDK version (semver)" },
+    "service.name": { "type": "string", "minLength": 1, "description": "Name of the emitting service" },
+    "service.version": { "type": "string", "description": "Version of the emitting service" },
+    "deployment.environment": { "type": "string", "description": "Deployment environment (dev, staging, production)" },
+    "trace.id": { "type": "string", "pattern": "^[a-f0-9]{32}$", "description": "W3C Trace Context trace-id" },
+    "span.id": { "type": "string", "pattern": "^[a-f0-9]{16}$", "description": "W3C Trace Context span-id" },
+    "parent.span.id": { "type": "string", "pattern": "^[a-f0-9]{16}$", "description": "Parent span identifier" },
+    "correlation.id": { "type": "string", "description": "DT3 business-level correlation ID" },
+    "tenant.id": { "type": "string", "description": "Tenant identifier" },
+    "tenant.region": { "type": "string", "description": "Tenant region" },
+    "tenant.environment": { "type": "string", "description": "Tenant environment" },
+    "user.id": { "type": "string", "description": "User identifier" },
+    "session.id": { "type": "string", "description": "Session identifier" },
+    "duration.ms": { "type": "number", "minimum": 0, "description": "Duration in milliseconds" },
+    "error.type": { "type": "string", "description": "Error class/type name" },
+    "error.message": { "type": "string", "description": "Error message" },
+    "error.stack": { "type": "string", "description": "Error stack trace" },
+    "error.code": { "type": "string", "description": "Application-specific error code" },
+    "error.retryable": { "type": "boolean", "description": "Whether the error is retryable" },
+    "attributes": { "type": "object", "additionalProperties": true, "description": "Additional structured attributes" },
+    "dt3.validation.errors": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["field", "message", "rule"],
+        "properties": {
+          "field": {
+            "type": "string",
+            "description": "Affected event field or root marker"
+          },
+          "message": {
+            "type": "string",
+            "description": "Sanitized validation diagnostic message"
+          },
+          "rule": {
+            "type": "string",
+            "description": "Violated JSON Schema keyword"
+          }
+        },
+        "additionalProperties": false
+      },
+      "description": "Sanitized structured validation diagnostics attached in LENIENT mode"
+    },
+    "dt3.security.masked_fields": { "type": "array", "items": { "type": "string" }, "description": "List of fields that were masked" }
+  },
+  "additionalProperties": true
+}

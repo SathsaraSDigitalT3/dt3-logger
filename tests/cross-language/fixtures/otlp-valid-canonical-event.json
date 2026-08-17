@@ -1,0 +1,60 @@
+{
+  "purpose": "A canonical event maps to a single OTLP/HTTP JSON log record with portable body, severity, resource, and log attribute expectations.",
+  "event": {
+    "timestamp": "2026-07-09T12:34:56.123456789Z",
+    "severity": "INFO",
+    "message": "Shared OTLP fixture event",
+    "event.name": "SHARED_OTLP_FIXTURE_EVENT",
+    "schema.version": "1.0.0",
+    "sdk.name": "dt3-commons-java",
+    "sdk.version": "0.1.0",
+    "service.name": "shared-otlp-fixture-service",
+    "service.version": "2.0.0",
+    "deployment.environment": "test",
+    "count": 3,
+    "enabled": true
+  },
+  "expected": {
+    "severityText": "INFO",
+    "body": "Shared OTLP fixture event",
+    "logAttributes": [
+      {
+        "key": "event.name",
+        "valueType": "stringValue",
+        "value": "SHARED_OTLP_FIXTURE_EVENT"
+      },
+      {
+        "key": "schema.version",
+        "valueType": "stringValue",
+        "value": "1.0.0"
+      },
+      {
+        "key": "count",
+        "valueType": "intValue",
+        "value": "3"
+      },
+      {
+        "key": "enabled",
+        "valueType": "boolValue",
+        "value": "true"
+      }
+    ],
+    "resourceAttributes": [
+      {
+        "key": "service.name",
+        "valueType": "stringValue",
+        "value": "shared-otlp-fixture-service"
+      },
+      {
+        "key": "service.version",
+        "valueType": "stringValue",
+        "value": "2.0.0"
+      },
+      {
+        "key": "deployment.environment",
+        "valueType": "stringValue",
+        "value": "test"
+      }
+    ]
+  }
+}

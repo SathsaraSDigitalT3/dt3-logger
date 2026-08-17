@@ -53,6 +53,17 @@ public class ValidatorContractTest {
     }
 
     @Test
+    public void loggerSelectedSeverityIsNotPartOfTheCallerEventContract() {
+        LogEvent event = validEvent();
+        event.setSeverity("DEBUG");
+
+        Validator.ValidationResult result = new LogEventValidator().validate(event);
+
+        assertTrue(result.valid());
+        assertTrue(result.errors().isEmpty());
+    }
+
+    @Test
     public void publicValidatorReportsRequiredFieldsWithCanonicalShape() {
         Validator validator = new LogEventValidator();
         LogEvent invalidEvent = validEvent();

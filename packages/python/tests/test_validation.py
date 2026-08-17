@@ -374,3 +374,36 @@ def test_logger_exports_tenant_context_and_exception_error_fields(capsys) -> Non
     assert exported_event["error.message"] == "database unavailable"
     assert isinstance(exported_event["error.stack"], str)
     assert "dt3.validation.errors" not in exported_event
+
+
+def test_logger_method_owned_fields_override_caller_context_and_explicit_error_fields(
+    capsys,
+) -> None:
+    """Logger-owned fields must not be replaceable by caller context."""
+    logger = create_logger(_config())
+
+    try:
+        raise RuntimeError("authoritative error")
+    except RuntimeError as exception:
+        logger.error(
+            "authoritative message",
+            exception,
+            {
+                "severity": "DEBUG",
+                "message": "caller message",
+                "timestamp": "2000-01-01T00:00:00+00:00",
+                "event.name": 42,
+                "error.type": "CallerError",
+                "error.message": "caller error",
+                "error.stack": "caller stack",
+            },
+        )
+
+    exported_event = json.loads(capsys.readouterr().out)
+    assert exported_event["severity"] == "ERROR"
+    assert exported_event["message"] == "authoritative message"
+    assert exported_event["timestamp"] != "2000-01-01T00:00:00+00:00"
+    assert exported_event["event.name"] == "GENERIC_EVENT"
+    assert exported_event["error.type"] == "RuntimeError"
+    assert exported_event["error.message"] == "authoritative error"
+    assert exported_event["error.stack"] != "caller stack"

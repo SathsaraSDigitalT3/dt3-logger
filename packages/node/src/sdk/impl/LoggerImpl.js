@@ -2,17 +2,26 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.LoggerImpl = void 0;
 const types_1 = require("../../api/types");
+const FileTransport_1 = require("../FileTransport");
+const HttpTransport_1 = require("../HttpTransport");
+const context_1 = require("../context");
 const masking_1 = require("../masking");
+const OtlpTransport_1 = require("../OtlpTransport");
 const validation_1 = require("../validation");
 /**
- * Concrete DT3 logger that builds structured events and exports them to stdout.
+ * Concrete DT3 logger that builds, validates, and exports structured events.
  */
 class LoggerImpl {
     config;
     exporter;
+    failOpen;
     validationMode;
     maskingEngine;
     validator;
+    fileTransport;
+    httpTransport;
+    otlpTransport;
+    closed = false;
     /**
      * Create a logger from SDK configuration.
      *
@@ -21,6 +30,21 @@ class LoggerImpl {
     constructor(config) {
         this.config = config;
         this.exporter = typeof config.exporter === 'string' ? config.exporter : 'stdout';
+        this.failOpen = config.fail_open !== false;
+        this.fileTransport =
+            this.exporter === 'file'
+                ? new FileTransport_1.FileTransport(typeof config['exporter.file.path'] === 'string' ? config['exporter.file.path'] : '')
+                : undefined;
+        this.httpTransport =
+            this.exporter === 'http'
+                ? new HttpTransport_1.HttpTransport(typeof config['exporter.http.endpoint'] === 'string'
+                    ? config['exporter.http.endpoint']
+                    : '', this.resolveHttpTimeout(config), this.resolveHeaders(config['exporter.http.headers'], 'exporter.http.headers'))
+                : undefined;
+        this.otlpTransport =
+            this.exporter === 'otlp'
+                ? new OtlpTransport_1.OtlpTransport(typeof config['otlp.endpoint'] === 'string' ? config['otlp.endpoint'] : '', typeof config['otlp.timeout'] === 'number' ? config['otlp.timeout'] : 10000, this.resolveHeaders(config['otlp.headers'], 'otlp.headers'))
+                : undefined;
         this.validationMode = this.resolveValidationMode(config['validation.mode']);
         this.maskingEngine = new masking_1.MaskingEngine({
             sensitiveFields: Array.isArray(config['masking.fields'])
@@ -41,9 +65,59 @@ class LoggerImpl {
         }
         return normalizedMode;
     }
+    resolveHttpTimeout(config) {
+        const canonicalTimeout = config['exporter.http.timeout'];
+        const legacyTimeout = config['exporter.http.timeout_ms'];
+        if (canonicalTimeout !== undefined) {
+            if (typeof canonicalTimeout !== 'number') {
+                throw new Error('exporter.http.timeout must be a number of milliseconds');
+            }
+            return canonicalTimeout;
+        }
+        if (legacyTimeout !== undefined) {
+            if (typeof legacyTimeout !== 'number') {
+                throw new Error('exporter.http.timeout_ms must be a number of milliseconds');
+            }
+            return legacyTimeout;
+        }
+        return 5000;
+    }
+    resolveHeaders(value, key) {
+        if (value === undefined) {
+            return undefined;
+        }
+        if (value === null || Array.isArray(value) || typeof value !== 'object') {
+            throw new Error(`${key} must be a mapping of safe string header names to string values`);
+        }
+        const headers = Object.entries(value);
+        if (headers.some(([name, headerValue]) => name.trim().length === 0 ||
+            /[\r\n]/.test(name) ||
+            typeof headerValue !== 'string' ||
+            /[\r\n]/.test(headerValue))) {
+            throw new Error(`${key} must be a mapping of safe string header names to string values`);
+        }
+        return Object.fromEntries(headers);
+    }
+    ensureOpen() {
+        if (this.closed) {
+            throw new Error('Logger is closed');
+        }
+    }
+    handleDeliveryFailure(error) {
+        if (!this.failOpen) {
+            throw error;
+        }
+    }
     log(level, message, context, error) {
-        const eventName = typeof context?.['event.name'] === 'string' ? context['event.name'] : 'GENERIC_EVENT';
-        const logEvent = {
+        this.ensureOpen();
+        // Explicit event context intentionally overrides values inherited from the
+        // active execution scope. Logger-owned fields are asserted below.
+        const callerContext = { ...(0, context_1.getActiveLogContext)(), ...context };
+        const eventName = typeof callerContext['event.name'] === 'string' ? callerContext['event.name'] : 'GENERIC_EVENT';
+        const logEvent = { ...callerContext };
+        // The logger owns these fields; setting them after context prevents caller
+        // input from overriding method-selected severity or logger metadata.
+        Object.assign(logEvent, {
             timestamp: new Date().toISOString(),
             severity: level,
             message,
@@ -51,11 +125,7 @@ class LoggerImpl {
             'schema.version': typeof this.config['schema.version'] === 'string' ? this.config['schema.version'] : '1.0.0',
             'sdk.name': typeof this.config['sdk.name'] === 'string' ? this.config['sdk.name'] : '@digitalt3/commons',
             'sdk.version': typeof this.config['sdk.version'] === 'string' ? this.config['sdk.version'] : '0.1.0',
-            ...context,
-        };
-        // Required service metadata is copied only when supplied. This lets schema
-        // validation accurately report missing fields instead of hiding them behind
-        // synthetic "unknown" values.
+        });
         for (const field of ['service.name', 'service.version', 'deployment.environment']) {
             if (typeof this.config[field] === 'string') {
                 logEvent[field] = this.config[field];
@@ -66,8 +136,6 @@ class LoggerImpl {
             logEvent['error.message'] = error.message;
             logEvent['error.stack'] = error.stack;
         }
-        // The repository contract requires masking before validation so validation
-        // handling cannot expose caller-supplied sensitive values.
         const maskedResult = this.maskingEngine.mask(logEvent);
         const maskedEvent = maskedResult.data;
         if (maskedResult.maskedFields.length > 0) {
@@ -82,8 +150,22 @@ class LoggerImpl {
                 maskedEvent['dt3.validation.errors'] = validationResult.errors;
             }
         }
-        if (this.exporter === 'stdout') {
-            console.log(JSON.stringify(maskedEvent));
+        try {
+            if (this.exporter === 'stdout') {
+                console.log(JSON.stringify(maskedEvent));
+            }
+            else if (this.exporter === 'file') {
+                this.fileTransport?.export(maskedEvent);
+            }
+            else if (this.exporter === 'http') {
+                this.httpTransport?.export(maskedEvent);
+            }
+            else if (this.exporter === 'otlp') {
+                this.otlpTransport?.export(maskedEvent);
+            }
+        }
+        catch (deliveryError) {
+            this.handleDeliveryFailure(deliveryError);
         }
     }
     // PUBLIC_INTERFACE
@@ -95,6 +177,18 @@ class LoggerImpl {
      */
     debug(message, context) {
         this.log('DEBUG', message, context);
+    }
+    // PUBLIC_INTERFACE
+    /**
+     * Run a callback with trace and correlation context attached to all logs
+     * created in the callback's execution scope.
+     *
+     * @param context - Convenience trace and correlation identifiers.
+     * @param callback - Synchronous or asynchronous work to run in the scope.
+     * @returns The callback result.
+     */
+    withContext(context, callback) {
+        return (0, context_1.withLogContext)(context, callback);
     }
     // PUBLIC_INTERFACE
     /**
@@ -129,10 +223,36 @@ class LoggerImpl {
     }
     // PUBLIC_INTERFACE
     /**
-     * Flush pending log events. The stdout exporter has no buffered events.
+     * Settle delivery work initiated before the flush boundary.
+     *
+     * @returns A promise that rejects only when a delivery failure is configured
+     * to fail closed.
      */
-    flush() {
-        // No-op for stdout.
+    async flush() {
+        this.ensureOpen();
+        try {
+            this.fileTransport?.flush();
+            await this.httpTransport?.flush();
+            await this.otlpTransport?.flush();
+        }
+        catch (error) {
+            this.handleDeliveryFailure(error);
+        }
+    }
+    // PUBLIC_INTERFACE
+    /**
+     * Close the logger and its active transport.
+     *
+     * Closing is idempotent. Subsequent logging and flush calls fail with a
+     * documented terminal-state error.
+     */
+    close() {
+        if (this.closed) {
+            return;
+        }
+        this.closed = true;
+        this.httpTransport?.close();
+        this.otlpTransport?.close();
     }
 }
 exports.LoggerImpl = LoggerImpl;

@@ -135,8 +135,26 @@
     },
     "dt3.validation.errors": {
       "type": "array",
-      "items": { "type": "string" },
-      "description": "Validation errors (LENIENT mode)"
+      "items": {
+        "type": "object",
+        "required": ["field", "message", "rule"],
+        "properties": {
+          "field": {
+            "type": "string",
+            "description": "Affected event field or root marker"
+          },
+          "message": {
+            "type": "string",
+            "description": "Sanitized validation diagnostic message"
+          },
+          "rule": {
+            "type": "string",
+            "description": "Violated JSON Schema keyword"
+          }
+        },
+        "additionalProperties": false
+      },
+      "description": "Sanitized structured validation diagnostics attached in LENIENT mode"
     },
     "dt3.security.masked_fields": {
       "type": "array",

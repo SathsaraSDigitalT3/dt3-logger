@@ -1,3 +1,8 @@
+import { readFileSync, rmSync } from 'node:fs';
+import { createServer, IncomingMessage, Server } from 'node:http';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
 import {
   createLogger,
   LogEventValidator,
@@ -21,6 +26,31 @@ const baseConfig = (
 const readExportedEvent = (logSpy: jest.SpyInstance): Record<string, unknown> => {
   expect(logSpy).toHaveBeenCalledTimes(1);
   return JSON.parse(logSpy.mock.calls[0][0] as string) as Record<string, unknown>;
+};
+
+const createTemporaryLogPath = (): string =>
+  join(tmpdir(), `dt3-node-file-transport-${Date.now()}-${Math.random().toString(16).slice(2)}.jsonl`);
+
+const startHttpServer = async (
+  handler: (request: IncomingMessage, body: string) => void,
+): Promise<{ server: Server; endpoint: string }> => {
+  const server = createServer((request, response) => {
+    const chunks: Buffer[] = [];
+    request.on('data', (chunk: Buffer) => chunks.push(chunk));
+    request.on('end', () => {
+      handler(request, Buffer.concat(chunks).toString('utf8'));
+      response.writeHead(202);
+      response.end();
+    });
+  });
+
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const address = server.address();
+  if (address === null || typeof address === 'string') {
+    throw new Error('Unable to determine HTTP test server address');
+  }
+
+  return { server, endpoint: `http://127.0.0.1:${address.port}/v1/events` };
 };
 
 describe('MaskingEngine', () => {
@@ -179,6 +209,17 @@ describe('LoggerImpl behavior', () => {
     expect(typeof event.timestamp).toBe('string');
   });
 
+  it('keeps logger-method severity when caller context attempts to override it', () => {
+    const logger = createLogger(baseConfig());
+
+    logger.warn('Reserved severity', {
+      'event.name': 'RESERVED_SEVERITY',
+      severity: 'ERROR',
+    });
+
+    expect(readExportedEvent(logSpy).severity).toBe('WARN');
+  });
+
   it('exports error detail, stack, tenant fields, and structured attributes', () => {
     const logger = createLogger(baseConfig());
     const error = new Error('database unavailable');
@@ -271,7 +312,8 @@ describe('LoggerImpl behavior', () => {
 
     const event = readExportedEvent(logSpy);
     expect(event['event.name']).toBe('not-valid');
-    expect(event.timestamp).toBe('not-a-date-time');
+    expect(typeof event.timestamp).toBe('string');
+    expect(event.timestamp).not.toBe('not-a-date-time');
     expect(event['dt3.validation.errors']).toBeUndefined();
   });
 
@@ -286,5 +328,350 @@ describe('LoggerImpl behavior', () => {
     expect(() => createLogger(baseConfig('UNSUPPORTED'))).toThrow(
       'validation.mode must be one of STRICT, LENIENT, or OFF',
     );
+  });
+});
+
+describe('File transport', () => {
+  it('writes a canonical structured record through the existing logger API', () => {
+    const filePath = createTemporaryLogPath();
+    const logger = createLogger(
+      baseConfig(ValidationMode.STRICT, {
+        exporter: 'file',
+        'exporter.file.path': filePath,
+      }),
+    );
+
+    try {
+      logger.info('File transport started', { 'event.name': 'FILE_TRANSPORT_STARTED' });
+      logger.flush();
+
+      const lines = readFileSync(filePath, 'utf8').trim().split('\n');
+      expect(lines).toHaveLength(1);
+
+      const event = JSON.parse(lines[0]) as Record<string, unknown>;
+      expect(event).toMatchObject({
+        severity: 'INFO',
+        message: 'File transport started',
+        'event.name': 'FILE_TRANSPORT_STARTED',
+        'schema.version': '1.0.0',
+        'sdk.name': '@digitalt3/commons',
+        'sdk.version': '0.1.0',
+        'service.name': 'test-service',
+        'service.version': '1.0.0',
+        'deployment.environment': 'test',
+      });
+      expect(typeof event.timestamp).toBe('string');
+    } finally {
+      rmSync(filePath, { force: true });
+    }
+  });
+
+  it('requires a configured file path for the file exporter', () => {
+    expect(() => createLogger(baseConfig(ValidationMode.LENIENT, { exporter: 'file' }))).toThrow(
+      'exporter.file.path must be configured for the file exporter',
+    );
+  });
+
+  it('swallows file export failures when fail_open is enabled', () => {
+    const logger = createLogger(
+      baseConfig(ValidationMode.STRICT, {
+        exporter: 'file',
+        'exporter.file.path': join(tmpdir(), 'dt3-node-fail-open', 'transport.jsonl'),
+      }),
+    );
+    const transport = (logger as unknown as { fileTransport: { export: (event: unknown) => void } })
+      .fileTransport;
+    const exportError = new Error('file export failed');
+    const exportSpy = jest.spyOn(transport, 'export').mockImplementation(() => {
+      throw exportError;
+    });
+
+    try {
+      expect(() =>
+        logger.info('Continue after export failure', { 'event.name': 'FILE_EXPORT_FAILED' }),
+      ).not.toThrow();
+      expect(exportSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      exportSpy.mockRestore();
+    }
+  });
+
+  it('propagates file export failures when fail_open is disabled', () => {
+    const logger = createLogger(
+      baseConfig(ValidationMode.STRICT, {
+        exporter: 'file',
+        fail_open: false,
+        'exporter.file.path': join(tmpdir(), 'dt3-node-fail-closed', 'transport.jsonl'),
+      }),
+    );
+    const transport = (logger as unknown as { fileTransport: { export: (event: unknown) => void } })
+      .fileTransport;
+    const exportError = new Error('file export failed');
+    const exportSpy = jest.spyOn(transport, 'export').mockImplementation(() => {
+      throw exportError;
+    });
+
+    try {
+      expect(() =>
+        logger.info('Propagate export failure', { 'event.name': 'FILE_EXPORT_FAILED' }),
+      ).toThrow(exportError);
+      expect(exportSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      exportSpy.mockRestore();
+    }
+  });
+});
+
+describe('HTTP transport', () => {
+  it('POSTs the final canonical event as application/json through the logger pipeline', async () => {
+    let capturedMethod: string | undefined;
+    let capturedContentType: string | undefined;
+    let capturedEvent: Record<string, unknown> | undefined;
+    let resolveRequest: (() => void) | undefined;
+    const received = new Promise<void>((resolve) => {
+      resolveRequest = resolve;
+    });
+    const { server, endpoint } = await startHttpServer((request, body) => {
+      capturedMethod = request.method;
+      capturedContentType = request.headers['content-type'];
+      capturedEvent = JSON.parse(body) as Record<string, unknown>;
+      resolveRequest?.();
+    });
+
+    try {
+      const logger = createLogger(
+        baseConfig(ValidationMode.STRICT, {
+          exporter: 'http',
+          'exporter.http.endpoint': endpoint,
+          'exporter.http.timeout_ms': 1000,
+        }),
+      );
+
+      logger.info('HTTP transport started', {
+        'event.name': 'HTTP_TRANSPORT_STARTED',
+        attributes: { region: 'us-east' },
+      });
+      await received;
+
+      expect(capturedMethod).toBe('POST');
+      expect(capturedContentType).toBe('application/json');
+      expect(capturedEvent).toMatchObject({
+        severity: 'INFO',
+        message: 'HTTP transport started',
+        'event.name': 'HTTP_TRANSPORT_STARTED',
+        'schema.version': '1.0.0',
+        'sdk.name': '@digitalt3/commons',
+        'sdk.version': '0.1.0',
+        'service.name': 'test-service',
+        'service.version': '1.0.0',
+        'deployment.environment': 'test',
+        attributes: { region: 'us-east' },
+      });
+      expect(typeof capturedEvent?.timestamp).toBe('string');
+    } finally {
+      await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
+    }
+  });
+
+  it('prefers canonical exporter.http.timeout over the deprecated _ms alias', async () => {
+    const { server, endpoint } = await startHttpServer(() => undefined);
+
+    try {
+      const logger = createLogger(
+        baseConfig(ValidationMode.STRICT, {
+          exporter: 'http',
+          'exporter.http.endpoint': endpoint,
+          'exporter.http.timeout': 1000,
+          'exporter.http.timeout_ms': 0,
+        }),
+      );
+
+      logger.info('Canonical timeout', { 'event.name': 'CANONICAL_TIMEOUT' });
+      await expect(logger.flush()).resolves.toBeUndefined();
+    } finally {
+      await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
+    }
+  });
+
+  it('masks sensitive fields before sending an HTTP request', async () => {
+    let capturedPayload = '';
+    let resolveRequest: (() => void) | undefined;
+    const received = new Promise<void>((resolve) => {
+      resolveRequest = resolve;
+    });
+    const { server, endpoint } = await startHttpServer((_, body) => {
+      capturedPayload = body;
+      resolveRequest?.();
+    });
+
+    try {
+      const logger = createLogger(
+        baseConfig(ValidationMode.LENIENT, {
+          exporter: 'http',
+          'exporter.http.endpoint': endpoint,
+          'masking.track_masked_fields': true,
+        }),
+      );
+
+      logger.info('Sensitive HTTP event', {
+        'event.name': 'SENSITIVE_HTTP_EVENT',
+        password: 'do-not-export',
+        attributes: { token: 'nested-secret' },
+      });
+      await received;
+
+      const event = JSON.parse(capturedPayload) as Record<string, unknown>;
+      expect(capturedPayload).not.toContain('do-not-export');
+      expect(capturedPayload).not.toContain('nested-secret');
+      expect(event.password).toBe('[REDACTED]');
+      expect(event['dt3.security.masked_fields']).toEqual(['password', 'attributes.token']);
+    } finally {
+      await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
+    }
+  });
+
+  it('does not initiate an HTTP request when STRICT validation rejects an event', () => {
+    const logger = createLogger(
+      baseConfig(ValidationMode.STRICT, {
+        exporter: 'http',
+        'exporter.http.endpoint': 'http://127.0.0.1:65534/v1/events',
+      }),
+    );
+    const transport = (logger as unknown as { httpTransport: { export: (event: unknown) => void } })
+      .httpTransport;
+    const exportSpy = jest.spyOn(transport, 'export');
+
+    try {
+      expect(() => logger.info('Invalid event', { 'event.name': 'invalid-name' })).toThrow(ValidationError);
+      expect(exportSpy).not.toHaveBeenCalled();
+    } finally {
+      exportSpy.mockRestore();
+    }
+  });
+
+  it.each([
+    [true, false],
+    [false, true],
+  ])('uses fail_open=%s for synchronous transport failures', (failOpen, shouldThrow) => {
+    const logger = createLogger(
+      baseConfig(ValidationMode.STRICT, {
+        exporter: 'http',
+        fail_open: failOpen,
+        'exporter.http.endpoint': 'http://127.0.0.1:65534/v1/events',
+      }),
+    );
+    const transport = (logger as unknown as { httpTransport: { export: (event: unknown) => void } })
+      .httpTransport;
+    const exportError = new Error('HTTP export failed');
+    const exportSpy = jest.spyOn(transport, 'export').mockImplementation(() => {
+      throw exportError;
+    });
+
+    try {
+      const operation = () => logger.info('HTTP export failure', { 'event.name': 'HTTP_EXPORT_FAILED' });
+      if (shouldThrow) {
+        expect(operation).toThrow(exportError);
+      } else {
+        expect(operation).not.toThrow();
+      }
+      expect(exportSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      exportSpy.mockRestore();
+    }
+  });
+
+  it('makes a non-2xx HTTP response observable through fail-closed flush', async () => {
+    const server = createServer((request, response) => {
+      request.resume();
+      request.on('end', () => {
+        response.writeHead(500);
+        response.end();
+      });
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const address = server.address();
+    if (address === null || typeof address === 'string') {
+      throw new Error('Unable to determine HTTP test server address');
+    }
+
+    try {
+      const logger = createLogger(
+        baseConfig(ValidationMode.STRICT, {
+          exporter: 'http',
+          fail_open: false,
+          'exporter.http.endpoint': `http://127.0.0.1:${address.port}/v1/events`,
+        }),
+      );
+
+      logger.info('HTTP failure', { 'event.name': 'HTTP_EXPORT_FAILED' });
+      await expect(logger.flush()).rejects.toThrow('HTTP export failed with status 500');
+    } finally {
+      await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
+    }
+  });
+
+  it('swallows asynchronous HTTP delivery failures when fail_open is enabled', async () => {
+    const logger = createLogger(
+      baseConfig(ValidationMode.STRICT, {
+        exporter: 'http',
+        fail_open: true,
+        'exporter.http.endpoint': 'http://127.0.0.1:65534/v1/events',
+      }),
+    );
+
+    logger.info('HTTP unavailable', { 'event.name': 'HTTP_EXPORT_FAILED' });
+    await expect(logger.flush()).resolves.toBeUndefined();
+  });
+
+  it('rejects unsafe generic HTTP headers during initialization', () => {
+    expect(() =>
+      createLogger(
+        baseConfig(ValidationMode.STRICT, {
+          exporter: 'http',
+          'exporter.http.endpoint': 'http://collector.example.test/v1/events',
+          'exporter.http.headers': { 'X-Unsafe': 'value\r\nInjected: true' },
+        }),
+      )
+    ).toThrow('exporter.http.headers must be a mapping of safe string header names to string values');
+  });
+
+  it('closes idempotently and rejects subsequent logging and flush operations', async () => {
+    const logger = createLogger(baseConfig());
+
+    logger.close();
+    logger.close();
+
+    expect(() => logger.info('Closed', { 'event.name': 'CLOSED_LOGGER' })).toThrow('Logger is closed');
+    await expect(logger.flush()).rejects.toThrow('Logger is closed');
+  });
+
+  it('sends LENIENT validation diagnostics to HTTP', async () => {
+    let capturedEvent: Record<string, unknown> | undefined;
+    let resolveRequest: (() => void) | undefined;
+    const received = new Promise<void>((resolve) => {
+      resolveRequest = resolve;
+    });
+    const { server, endpoint } = await startHttpServer((_, body) => {
+      capturedEvent = JSON.parse(body) as Record<string, unknown>;
+      resolveRequest?.();
+    });
+
+    try {
+      const logger = createLogger(
+        baseConfig(ValidationMode.LENIENT, {
+          exporter: 'http',
+          'exporter.http.endpoint': endpoint,
+        }),
+      );
+
+      logger.info('Invalid event', { 'event.name': 'invalid-name' });
+      await received;
+
+      expect(capturedEvent?.['dt3.validation.errors']).toEqual(
+        expect.arrayContaining([expect.objectContaining({ field: 'event.name', rule: 'pattern' })]),
+      );
+    } finally {
+      await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
+    }
   });
 });

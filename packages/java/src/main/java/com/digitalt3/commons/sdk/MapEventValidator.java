@@ -10,6 +10,8 @@ import com.networknt.schema.SpecVersion;
 import com.networknt.schema.ValidationMessage;
 
 import java.io.InputStream;
+import java.time.DateTimeException;
+import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -41,11 +43,26 @@ final class MapEventValidator {
     List<ValidationErrorDetail> validate(Map<String, Object> event) {
         JsonNode eventNode = OBJECT_MAPPER.valueToTree(event);
         Set<ValidationMessage> validationMessages = CANONICAL_SCHEMA.schema().validate(eventNode);
+        List<String> missingRequiredProperties = missingRequiredProperties(event);
+        int requiredDiagnosticIndex = 0;
 
-        List<ValidationErrorDetail> errors = new ArrayList<>(validationMessages.size());
+        List<ValidationErrorDetail> errors = new ArrayList<>(validationMessages.size() + 1);
         for (ValidationMessage validationMessage : validationMessages) {
-            errors.add(toDetail(validationMessage, event));
+            if ("required".equals(validationMessage.getType())) {
+                String field = requiredDiagnosticIndex < missingRequiredProperties.size()
+                    ? missingRequiredProperties.get(requiredDiagnosticIndex)
+                    : "$";
+                requiredDiagnosticIndex++;
+                errors.add(new ValidationErrorDetail(
+                    field,
+                    "Required property is missing",
+                    "required"
+                ));
+            } else {
+                errors.add(toDetail(validationMessage, event));
+            }
         }
+        addTimestampFormatDiagnostic(event, errors);
         return List.copyOf(errors);
     }
 
@@ -72,7 +89,7 @@ final class MapEventValidator {
             return errors;
         }
 
-        throw new IllegalArgumentException(
+        throw new LogEventValidationException(
             "Log event validation failed: " + formatErrors(errors)
         );
     }
@@ -126,6 +143,27 @@ final class MapEventValidator {
         return List.copyOf(requiredProperties);
     }
 
+    /**
+     * Return the absent root-level required properties in canonical schema order.
+     *
+     * <p>NetworkNT emits one validation message for each missing property, but
+     * its message does not reliably expose the specific property name. Pairing
+     * those messages with this ordered list preserves a diagnostic for every
+     * missing required field without exposing event values.</p>
+     *
+     * @param event final event map being validated
+     * @return absent canonical required property names in schema order
+     */
+    private List<String> missingRequiredProperties(Map<String, Object> event) {
+        List<String> missingProperties = new ArrayList<>();
+        for (String requiredProperty : CANONICAL_SCHEMA.requiredProperties()) {
+            if (!event.containsKey(requiredProperty)) {
+                missingProperties.add(requiredProperty);
+            }
+        }
+        return List.copyOf(missingProperties);
+    }
+
     private ValidationErrorDetail toDetail(
         ValidationMessage validationMessage,
         Map<String, Object> event
@@ -155,6 +193,61 @@ final class MapEventValidator {
             case "minimum" -> "Value is below the minimum";
             default -> "Schema validation failed";
         };
+    }
+
+    /**
+     * Add the canonical timestamp format diagnostic when the schema engine does
+     * not enforce JSON Schema {@code date-time} formats by default.
+     *
+     * <p>The shared fixture contract requires an RFC 3339 offset date-time. The
+     * diagnostic deliberately contains no rejected value so it remains safe for
+     * LENIENT event output and STRICT exception messages.</p>
+     *
+     * @param event final flat event map being validated
+     * @param errors schema diagnostics to extend when needed
+     */
+    private void addTimestampFormatDiagnostic(
+        Map<String, Object> event,
+        List<ValidationErrorDetail> errors
+    ) {
+        Object timestamp = event.get("timestamp");
+        if (!(timestamp instanceof String timestampText) || isOffsetDateTime(timestampText)) {
+            return;
+        }
+
+        boolean schemaAlreadyReportedFormat = errors.stream().anyMatch(error ->
+            "timestamp".equals(error.field()) && "format".equals(error.rule())
+        );
+        if (!schemaAlreadyReportedFormat) {
+            errors.add(new ValidationErrorDetail(
+                "timestamp",
+                "Value has an invalid format",
+                "format"
+            ));
+        }
+    }
+
+    /**
+     * Return whether a timestamp conforms to the RFC 3339 offset date-time
+     * representation required by the canonical schema.
+     *
+     * @param timestampText candidate timestamp text
+     * @return {@code true} when the candidate is a valid offset date-time
+     */
+    private boolean isOffsetDateTime(String timestampText) {
+        // OffsetDateTime accepts ISO-8601 variants (for example, basic offsets)
+        // that are outside the shared RFC 3339 date-time contract.
+        if (!timestampText.matches(
+            "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?(?:Z|[+-]\\d{2}:\\d{2})$"
+        )) {
+            return false;
+        }
+        try {
+            OffsetDateTime.parse(timestampText);
+            return true;
+        } catch (DateTimeException exception) {
+            return false;
+        }
     }
 
     /**
@@ -210,11 +303,30 @@ final class MapEventValidator {
 
         String instanceLocation = validationMessage.getInstanceLocation().toString();
         if (instanceLocation == null || instanceLocation.isEmpty() || "/".equals(instanceLocation)) {
-            return "$";
+            return presentNullRequiredProperty(event);
         }
 
         String instanceField = decodeInstanceLocation(instanceLocation);
         return event.containsKey(instanceField) ? instanceField : "$";
+    }
+
+    /**
+     * Identify a required field that is present with a null value.
+     *
+     * <p>Some JSON Schema validators report a null type violation at the root
+     * instance location. The canonical required-property order gives the logger
+     * a stable, non-sensitive field label for that diagnostic.</p>
+     *
+     * @param event final flat event map being validated
+     * @return the first required field with a null value, or {@code $} if none exists
+     */
+    private String presentNullRequiredProperty(Map<String, Object> event) {
+        for (String requiredProperty : CANONICAL_SCHEMA.requiredProperties()) {
+            if (event.containsKey(requiredProperty) && event.get(requiredProperty) == null) {
+                return requiredProperty;
+            }
+        }
+        return "$";
     }
 
     private String decodeInstanceLocation(String instanceLocation) {

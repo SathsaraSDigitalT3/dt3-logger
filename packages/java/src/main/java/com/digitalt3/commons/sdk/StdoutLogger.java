@@ -1,6 +1,7 @@
 package com.digitalt3.commons.sdk;
 
 import com.digitalt3.commons.api.Logger;
+import com.digitalt3.commons.api.LogContext;
 import com.digitalt3.commons.api.SdkConfig;
 import com.digitalt3.commons.api.ValidationMode;
 import com.digitalt3.commons.api.Validator;
@@ -15,10 +16,11 @@ import java.util.Map;
 import java.util.Objects;
 
 /**
- * Synchronous logger that builds masked structured events and writes JSON to stdout.
+ * Synchronous logger that builds, masks, validates, and exports structured events.
  *
- * <p>Only stdout export is supported in the current cross-language baseline.
- * Calls are synchronous, so {@link #flush()} delegates directly to stdout.</p>
+ * <p>Despite its retained historical name, this implementation supports the
+ * configured stdout and file exporters. The processing order is canonical event
+ * creation, masking, validation, then transport delivery.</p>
  *
  * @since 0.1.0
  */
@@ -29,11 +31,17 @@ public final class StdoutLogger implements Logger {
     private final SdkConfig config;
     private final RecursiveMaskingEngine maskingEngine;
     private final MapEventValidator eventValidator;
+    private final FileTransport fileTransport;
+    private final HttpTransport httpTransport;
+    private final OtlpTransport otlpTransport;
+    private boolean closed;
 
     /**
-     * Create a logger from SDK metadata and supported masking settings.
+     * Create a logger from SDK metadata and supported masking/export settings.
      *
      * @param config SDK configuration
+     * @throws IllegalArgumentException if exporter configuration is unsupported
+     *     or the file exporter has no destination path
      */
     public StdoutLogger(SdkConfig config) {
         this.config = Objects.requireNonNull(config, "config must not be null");
@@ -44,6 +52,9 @@ public final class StdoutLogger implements Logger {
             config.isMaskingEnabled()
         );
         this.eventValidator = new MapEventValidator();
+        this.fileTransport = createFileTransport(config);
+        this.httpTransport = createHttpTransport(config);
+        this.otlpTransport = createOtlpTransport(config);
     }
 
     // PUBLIC_INTERFACE
@@ -97,14 +108,115 @@ public final class StdoutLogger implements Logger {
 
     // PUBLIC_INTERFACE
     /**
-     * Flush stdout. Events are emitted synchronously and require no buffering.
+     * Flush the configured synchronous transport.
      */
     @Override
     public void flush() {
+        ensureOpen();
+        if (fileTransport != null) {
+            try {
+                fileTransport.flush();
+            } catch (IllegalStateException exception) {
+                handleTransportFailure(exception);
+            }
+            return;
+        }
+        if (httpTransport != null) {
+            try {
+                httpTransport.flush();
+            } catch (HttpTransportError | OtlpTransportError exception) {
+                handleTransportFailure(exception);
+            }
+            return;
+        }
+        if (otlpTransport != null) {
+            try {
+                otlpTransport.flush();
+            } catch (HttpTransportError | OtlpTransportError exception) {
+                handleTransportFailure(exception);
+            }
+            return;
+        }
+
         System.out.flush();
     }
 
+    // PUBLIC_INTERFACE
+    /**
+     * Close the configured transport and prevent subsequent logging or flushes.
+     *
+     * <p>This operation is idempotent. The Java SDK retains {@code close} as
+     * the logger lifecycle name while transports retain their existing
+     * {@code shutdown} contract.</p>
+     */
+    @Override
+    public synchronized void close() {
+        if (closed) {
+            return;
+        }
+        closed = true;
+
+        if (fileTransport != null) {
+            try {
+                fileTransport.shutdown();
+            } catch (IllegalStateException exception) {
+                handleTransportFailure(exception);
+            }
+        } else if (httpTransport != null) {
+            try {
+                httpTransport.shutdown();
+            } catch (HttpTransportError | OtlpTransportError exception) {
+                handleTransportFailure(exception);
+            }
+        } else if (otlpTransport != null) {
+            try {
+                otlpTransport.shutdown();
+            } catch (HttpTransportError | OtlpTransportError exception) {
+                handleTransportFailure(exception);
+            }
+        }
+    }
+
+    private FileTransport createFileTransport(SdkConfig sdkConfig) {
+        String exporter = sdkConfig.getExporter();
+        if (exporter == null || exporter.trim().isEmpty() || "stdout".equalsIgnoreCase(exporter)) {
+            return null;
+        }
+        if ("file".equalsIgnoreCase(exporter)) {
+            return new FileTransport(sdkConfig.getFilePath());
+        }
+        if ("http".equalsIgnoreCase(exporter)) {
+            return null;
+        }
+        if ("otlp".equalsIgnoreCase(exporter)) {
+            return null;
+        }
+
+        throw new IllegalArgumentException("Unsupported exporter: " + exporter);
+    }
+
+    private HttpTransport createHttpTransport(SdkConfig sdkConfig) {
+        return "http".equalsIgnoreCase(sdkConfig.getExporter())
+            ? new HttpTransport(
+                sdkConfig.getHttpEndpoint(),
+                sdkConfig.getHttpTimeout(),
+                sdkConfig.getHttpHeaders()
+            )
+            : null;
+    }
+
+    private OtlpTransport createOtlpTransport(SdkConfig sdkConfig) {
+        return "otlp".equalsIgnoreCase(sdkConfig.getExporter())
+            ? new OtlpTransport(
+                sdkConfig.getOtlpEndpoint(),
+                sdkConfig.getOtlpTimeout(),
+                sdkConfig.getOtlpHeaders()
+            )
+            : null;
+    }
+
     private void log(String severity, String message, Map<String, Object> context, Throwable error) {
+        ensureOpen();
         ValidationMode validationMode = config.getValidationMode();
         if (validationMode == null) {
             throw new IllegalArgumentException(
@@ -112,66 +224,59 @@ public final class StdoutLogger implements Logger {
             );
         }
 
-        try {
-            Map<String, Object> event = createEvent(severity, message, context, error);
-            Map<String, Object> maskedEvent = maskingEngine.mask(event);
-            List<String> maskedFields = maskingEngine.getMaskedFields();
+        Map<String, Object> event = createEvent(severity, message, context, error);
+        Map<String, Object> maskedEvent = maskingEngine.mask(event);
+        List<String> maskedFields = maskingEngine.getMaskedFields();
 
-            if (!maskedFields.isEmpty()) {
-                maskedEvent.put("dt3.security.masked_fields", maskedFields);
-            }
+        if (!maskedFields.isEmpty()) {
+            maskedEvent.put("dt3.security.masked_fields", maskedFields);
+        }
 
-            List<Validator.ValidationErrorDetail> validationErrors = eventValidator.apply(
-                maskedEvent,
-                validationMode
+        List<Validator.ValidationErrorDetail> validationErrors = eventValidator.apply(
+            maskedEvent,
+            validationMode
+        );
+        if (!validationErrors.isEmpty() && validationMode == ValidationMode.LENIENT) {
+            maskedEvent.put(
+                "dt3.validation.errors",
+                validationErrors.stream()
+                    .map(errorDetail -> Map.of(
+                        "field", errorDetail.field(),
+                        "message", errorDetail.message(),
+                        "rule", errorDetail.rule()
+                    ))
+                    .toList()
             );
-            if (!validationErrors.isEmpty() && validationMode == ValidationMode.LENIENT) {
-                redactInvalidValues(maskedEvent, validationErrors);
-                maskedEvent.put(
-                    "dt3.validation.errors",
-                    validationErrors.stream()
-                        .map(errorDetail -> Map.of(
-                            "field", errorDetail.field(),
-                            "message", errorDetail.message(),
-                            "rule", errorDetail.rule()
-                        ))
-                        .toList()
-                );
-            }
+        }
 
-            System.out.println(toJson(maskedEvent));
-        } catch (IllegalArgumentException validationException) {
-            if (validationMode == ValidationMode.STRICT) {
-                throw validationException;
-            }
-        } catch (RuntimeException ignored) {
-            // Logging is fail-open: the host application must not fail because logging failed.
+        try {
+            writeFinalEvent(maskedEvent);
+        } catch (HttpTransportError | OtlpTransportError | IllegalStateException exception) {
+            handleTransportFailure(exception);
         }
     }
 
-    /**
-     * Remove caller-provided values that failed type validation before lenient export.
-     *
-     * <p>Schema diagnostics intentionally contain only structural locations. This
-     * additional replacement prevents the invalid value itself from being emitted
-     * alongside those diagnostics.</p>
-     *
-     * @param event event that will be serialized
-     * @param validationErrors sanitized schema diagnostics
-     */
-    private void redactInvalidValues(
-        Map<String, Object> event,
-        List<Validator.ValidationErrorDetail> validationErrors
-    ) {
-        for (Validator.ValidationErrorDetail validationError : validationErrors) {
-            if (!"type".equals(validationError.rule())) {
-                continue;
-            }
+    private void writeFinalEvent(Map<String, Object> finalEvent) {
+        String serializedEvent = toJson(finalEvent);
+        if (fileTransport != null) {
+            fileTransport.writeJson(serializedEvent);
+            return;
+        }
+        if (httpTransport != null) {
+            httpTransport.writeJson(serializedEvent);
+            return;
+        }
+        if (otlpTransport != null) {
+            otlpTransport.writeEventMap(finalEvent);
+            return;
+        }
 
-            String field = validationError.field();
-            if (event.containsKey(field)) {
-                event.put(field, "[REDACTED]");
-            }
+        System.out.println(serializedEvent);
+    }
+
+    private void handleTransportFailure(RuntimeException exception) {
+        if (!config.isFailOpen()) {
+            throw exception;
         }
     }
 
@@ -181,7 +286,13 @@ public final class StdoutLogger implements Logger {
         Map<String, Object> context,
         Throwable error
     ) {
-        Map<String, Object> safeContext = context == null ? Map.of() : context;
+        // Scoped values are applied before explicit per-event context so callers
+        // can override trace/correlation fields for a single event. Logger-owned
+        // fields remain reasserted below after both context sources are merged.
+        Map<String, Object> safeContext = new LinkedHashMap<>(LogContext.activeValues());
+        if (context != null) {
+            safeContext.putAll(context);
+        }
         Object suppliedEventName = safeContext.get("event.name");
 
         Map<String, Object> event = new LinkedHashMap<>();
@@ -195,12 +306,30 @@ public final class StdoutLogger implements Logger {
         event.put("schema.version", valueOrDefault(config.getSchemaVersion(), "1.0.0"));
         event.put("sdk.name", valueOrDefault(config.getSdkName(), "dt3-commons-java"));
         event.put("sdk.version", valueOrDefault(config.getSdkVersion(), "0.1.0"));
-        event.put("service.name", valueOrDefault(config.getServiceName(), "unknown"));
-        event.put("service.version", valueOrDefault(config.getServiceVersion(), "unknown"));
+        putIfConfigured(event, "service.name", config.getServiceName());
+        putIfConfigured(event, "service.version", config.getServiceVersion());
         if (config.getDeploymentEnvironment() != null) {
             event.put("deployment.environment", config.getDeploymentEnvironment());
         }
         event.putAll(safeContext);
+        // Reassert every logger-owned field after context merging.
+        event.put("timestamp", event.get("timestamp"));
+        event.put("severity", severity);
+        event.put("message", message);
+        event.put(
+            "event.name",
+            suppliedEventName instanceof String ? suppliedEventName : GENERIC_EVENT
+        );
+        event.put("schema.version", valueOrDefault(config.getSchemaVersion(), "1.0.0"));
+        event.put("sdk.name", valueOrDefault(config.getSdkName(), "dt3-commons-java"));
+        event.put("sdk.version", valueOrDefault(config.getSdkVersion(), "0.1.0"));
+        putIfConfigured(event, "service.name", config.getServiceName());
+        putIfConfigured(event, "service.version", config.getServiceVersion());
+        removeIfNotConfigured(event, "service.name", config.getServiceName());
+        removeIfNotConfigured(event, "service.version", config.getServiceVersion());
+        if (config.getDeploymentEnvironment() != null) {
+            event.put("deployment.environment", config.getDeploymentEnvironment());
+        }
 
         if (error != null) {
             event.put("error.type", error.getClass().getSimpleName());
@@ -211,8 +340,26 @@ public final class StdoutLogger implements Logger {
         return event;
     }
 
+    private void ensureOpen() {
+        if (closed) {
+            throw new IllegalStateException("Logger is closed");
+        }
+    }
+
     private String valueOrDefault(String value, String defaultValue) {
         return value == null ? defaultValue : value;
+    }
+
+    private void putIfConfigured(Map<String, Object> event, String field, String value) {
+        if (value != null) {
+            event.put(field, value);
+        }
+    }
+
+    private void removeIfNotConfigured(Map<String, Object> event, String field, String value) {
+        if (value == null) {
+            event.remove(field);
+        }
     }
 
     private String stackTrace(Throwable error) {
@@ -221,7 +368,7 @@ public final class StdoutLogger implements Logger {
         return writer.toString();
     }
 
-    private String toJson(Object value) {
+    static String toJson(Object value) {
         if (value == null) {
             return "null";
         }
@@ -262,7 +409,7 @@ public final class StdoutLogger implements Logger {
         return toJson(String.valueOf(value));
     }
 
-    private String escapeJson(String value) {
+    private static String escapeJson(String value) {
         StringBuilder escaped = new StringBuilder(value.length() + 16);
         for (int index = 0; index < value.length(); index++) {
             char character = value.charAt(index);

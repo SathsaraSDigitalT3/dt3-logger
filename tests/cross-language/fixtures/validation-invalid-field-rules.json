@@ -1,0 +1,49 @@
+{
+  "purpose": "An event with invalid scalar values and an invalid nested attributes value reports stable field and rule pairs.",
+  "event": {
+    "timestamp": "not-a-date-time",
+    "severity": "TRACE",
+    "message": "Invalid validation fixture",
+    "event.name": "not-valid",
+    "schema.version": "1.0.0",
+    "sdk.name": "dt3-cross-language-fixture",
+    "sdk.version": "0.1.0",
+    "service.name": "fixture-service",
+    "service.version": "1.0.0",
+    "deployment.environment": "test",
+    "duration.ms": -1,
+    "error.retryable": "yes",
+    "attributes": [
+      "not-an-object"
+    ]
+  },
+  "expected": {
+    "valid": false,
+    "errors": [
+      {
+        "field": "timestamp",
+        "rule": "format"
+      },
+      {
+        "field": "severity",
+        "rule": "enum"
+      },
+      {
+        "field": "event.name",
+        "rule": "pattern"
+      },
+      {
+        "field": "duration.ms",
+        "rule": "minimum"
+      },
+      {
+        "field": "error.retryable",
+        "rule": "type"
+      },
+      {
+        "field": "attributes",
+        "rule": "type"
+      }
+    ]
+  }
+}

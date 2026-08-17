@@ -12,12 +12,12 @@ export declare class ValidationError extends Error {
     private static formatErrors;
 }
 /**
- * Validate structured log events against the canonical repository schema.
+ * Validate structured log events against the build-derived canonical schema.
  */
 export declare class LogEventValidator {
     private readonly validator;
     /**
-     * Load and compile the canonical DT3 log-event validation schema.
+     * Load and compile the canonical DT3 log-event validation schema artifact.
      */
     constructor();
     /**
