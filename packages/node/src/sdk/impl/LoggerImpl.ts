@@ -1,7 +1,8 @@
 import { Logger } from '../../api/Logger';
-import { Headers, LogEvent, ValidationMode } from '../../api/types';
+import { Headers, LogContext, LogEvent, ValidationMode } from '../../api/types';
 import { FileTransport } from '../FileTransport';
 import { HttpTransport } from '../HttpTransport';
+import { getActiveLogContext, withLogContext } from '../context';
 import { MaskingEngine } from '../masking';
 import { OtlpTransport } from '../OtlpTransport';
 import { LogEventValidator, ValidationError } from '../validation';
@@ -144,9 +145,12 @@ export class LoggerImpl implements Logger {
   ): void {
     this.ensureOpen();
 
+    // Explicit event context intentionally overrides values inherited from the
+    // active execution scope. Logger-owned fields are asserted below.
+    const callerContext = { ...getActiveLogContext(), ...context };
     const eventName =
-      typeof context?.['event.name'] === 'string' ? context['event.name'] : 'GENERIC_EVENT';
-    const logEvent: Record<string, unknown> = { ...context };
+      typeof callerContext['event.name'] === 'string' ? callerContext['event.name'] : 'GENERIC_EVENT';
+    const logEvent: Record<string, unknown> = { ...callerContext };
 
     // The logger owns these fields; setting them after context prevents caller
     // input from overriding method-selected severity or logger metadata.
@@ -215,6 +219,19 @@ export class LoggerImpl implements Logger {
    */
   public debug(message: string, context?: Record<string, unknown>): void {
     this.log('DEBUG', message, context);
+  }
+
+  // PUBLIC_INTERFACE
+  /**
+   * Run a callback with trace and correlation context attached to all logs
+   * created in the callback's execution scope.
+   *
+   * @param context - Convenience trace and correlation identifiers.
+   * @param callback - Synchronous or asynchronous work to run in the scope.
+   * @returns The callback result.
+   */
+  public withContext<T>(context: LogContext, callback: () => T): T {
+    return withLogContext(context, callback);
   }
 
   // PUBLIC_INTERFACE

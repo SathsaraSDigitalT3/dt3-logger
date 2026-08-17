@@ -1,6 +1,7 @@
 package com.digitalt3.commons.sdk;
 
 import com.digitalt3.commons.api.Logger;
+import com.digitalt3.commons.api.LogContext;
 import com.digitalt3.commons.api.SdkConfig;
 import com.digitalt3.commons.api.ValidationMode;
 import com.digitalt3.commons.api.Validator;
@@ -285,7 +286,13 @@ public final class StdoutLogger implements Logger {
         Map<String, Object> context,
         Throwable error
     ) {
-        Map<String, Object> safeContext = context == null ? Map.of() : context;
+        // Scoped values are applied before explicit per-event context so callers
+        // can override trace/correlation fields for a single event. Logger-owned
+        // fields remain reasserted below after both context sources are merged.
+        Map<String, Object> safeContext = new LinkedHashMap<>(LogContext.activeValues());
+        if (context != null) {
+            safeContext.putAll(context);
+        }
         Object suppliedEventName = safeContext.get("event.name");
 
         Map<String, Object> event = new LinkedHashMap<>();

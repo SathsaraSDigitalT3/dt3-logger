@@ -11,16 +11,17 @@ export declare class HttpTransportError extends Error {
     constructor(message: string);
 }
 /**
- * Synchronously initiate export of final DT3 structured log events to an HTTP endpoint.
+ * Export final DT3 structured events to a generic HTTP endpoint.
  *
- * Node's built-in HTTP client is asynchronous; this transport performs no buffering
- * and exposes failures through the request error callback. Logger-level `fail_open`
- * controls whether those failures are propagated.
+ * Requests are settled asynchronously and captured by `flush`, while `export`
+ * remains synchronous so existing logger method signatures are preserved.
  */
 export declare class HttpTransport {
     private readonly endpoint;
     private readonly timeoutMs;
     private readonly headers;
+    private readonly inFlight;
+    private closed;
     /**
      * Create an HTTP transport.
      *
@@ -31,17 +32,26 @@ export declare class HttpTransport {
      */
     constructor(endpoint: string, timeoutMs?: number, headers?: Headers);
     /**
-     * Export one final DT3 event as an application/json payload.
+     * Start export of one final DT3 event as an application/json payload.
      *
      * @param event - The already-masked and validation-processed canonical log event.
-     * @throws HttpTransportError if the request fails, times out, or returns a non-2xx response.
+     * @throws HttpTransportError if the transport is closed or initialization fails.
      */
     export(event: LogEvent): void;
     /**
-     * Flush output written by this transport.
+     * Settle requests started before this flush boundary.
      *
-     * Requests are sent immediately and no event buffer is maintained.
+     * @returns A promise that resolves when captured requests succeed or rejects
+     * with the first sanitized delivery failure.
+     * @throws HttpTransportError if the transport is closed.
      */
-    flush(): void;
+    flush(): Promise<void>;
+    /**
+     * Enter the terminal transport state.
+     *
+     * The generic HTTP transport owns no persistent sockets, so close only
+     * prevents future exports and flush operations.
+     */
+    close(): void;
     private static areValidHeaders;
 }

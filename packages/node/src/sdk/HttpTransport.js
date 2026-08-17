@@ -19,16 +19,17 @@ class HttpTransportError extends Error {
 }
 exports.HttpTransportError = HttpTransportError;
 /**
- * Synchronously initiate export of final DT3 structured log events to an HTTP endpoint.
+ * Export final DT3 structured events to a generic HTTP endpoint.
  *
- * Node's built-in HTTP client is asynchronous; this transport performs no buffering
- * and exposes failures through the request error callback. Logger-level `fail_open`
- * controls whether those failures are propagated.
+ * Requests are settled asynchronously and captured by `flush`, while `export`
+ * remains synchronous so existing logger method signatures are preserved.
  */
 class HttpTransport {
     endpoint;
     timeoutMs;
     headers;
+    inFlight = new Set();
+    closed = false;
     /**
      * Create an HTTP transport.
      *
@@ -42,10 +43,10 @@ class HttpTransport {
             throw new Error('exporter.http.endpoint must be configured for the HTTP exporter');
         }
         if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
-            throw new Error('exporter.http.timeout_ms must be greater than zero');
+            throw new Error('exporter.http.timeout must be greater than zero');
         }
         if (headers !== undefined && !HttpTransport.areValidHeaders(headers)) {
-            throw new Error('exporter.http.headers must be a mapping of string header names to string values');
+            throw new Error('exporter.http.headers must be a mapping of safe string header names to string values');
         }
         try {
             this.endpoint = new URL(endpoint);
@@ -60,46 +61,91 @@ class HttpTransport {
         this.headers = { ...(headers ?? {}) };
     }
     /**
-     * Export one final DT3 event as an application/json payload.
+     * Start export of one final DT3 event as an application/json payload.
      *
      * @param event - The already-masked and validation-processed canonical log event.
-     * @throws HttpTransportError if the request fails, times out, or returns a non-2xx response.
+     * @throws HttpTransportError if the transport is closed or initialization fails.
      */
     export(event) {
+        if (this.closed) {
+            throw new HttpTransportError('HTTP transport is closed');
+        }
         const payload = JSON.stringify(event);
         const headers = Object.fromEntries(Object.entries(this.headers).filter(([name]) => name.toLowerCase() !== 'content-type'));
         headers['Content-Type'] = 'application/json';
-        const requestFactory = this.endpoint.protocol === 'https:' ? node_https_1.request : node_http_1.request;
-        const outgoingRequest = requestFactory(this.endpoint, {
-            method: 'POST',
-            headers,
-            timeout: this.timeoutMs,
-        }, (response) => {
-            // Drain the response so the connection is not retained unnecessarily.
-            response.resume();
-            if (response.statusCode === undefined || response.statusCode < 200 || response.statusCode >= 300) {
-                outgoingRequest.destroy(new HttpTransportError(`HTTP export failed with status ${response.statusCode ?? 'unknown'}`));
-            }
+        let resolveDelivery;
+        let rejectDelivery;
+        const delivery = new Promise((resolve, reject) => {
+            resolveDelivery = resolve;
+            rejectDelivery = reject;
         });
-        outgoingRequest.once('timeout', () => {
-            outgoingRequest.destroy(new HttpTransportError('HTTP export request timed out'));
-        });
-        outgoingRequest.once('error', () => {
-            // Logger-level failure handling owns propagation and must not recursively log.
-        });
-        outgoingRequest.write(payload, 'utf8');
-        outgoingRequest.end();
+        this.inFlight.add(delivery);
+        void delivery.finally(() => this.inFlight.delete(delivery)).catch(() => undefined);
+        try {
+            const requestFactory = this.endpoint.protocol === 'https:' ? node_https_1.request : node_http_1.request;
+            const outgoingRequest = requestFactory(this.endpoint, {
+                method: 'POST',
+                headers,
+                timeout: this.timeoutMs,
+            }, (response) => {
+                response.resume();
+                if (response.statusCode === undefined || response.statusCode < 200 || response.statusCode >= 300) {
+                    rejectDelivery(new HttpTransportError(`HTTP export failed with status ${response.statusCode ?? 'unknown'}`));
+                    return;
+                }
+                resolveDelivery();
+            });
+            outgoingRequest.once('timeout', () => {
+                outgoingRequest.destroy(new HttpTransportError('HTTP export request timed out'));
+            });
+            outgoingRequest.once('error', (error) => {
+                rejectDelivery(error instanceof HttpTransportError
+                    ? error
+                    : new HttpTransportError('HTTP export request failed'));
+            });
+            outgoingRequest.write(payload, 'utf8');
+            outgoingRequest.end();
+        }
+        catch {
+            rejectDelivery(new HttpTransportError('HTTP export request could not be initiated'));
+        }
     }
     /**
-     * Flush output written by this transport.
+     * Settle requests started before this flush boundary.
      *
-     * Requests are sent immediately and no event buffer is maintained.
+     * @returns A promise that resolves when captured requests succeed or rejects
+     * with the first sanitized delivery failure.
+     * @throws HttpTransportError if the transport is closed.
      */
-    flush() {
-        // No-op: HTTP requests are initiated as soon as export is called.
+    async flush() {
+        if (this.closed) {
+            throw new HttpTransportError('HTTP transport is closed');
+        }
+        const pending = [...this.inFlight];
+        if (pending.length === 0) {
+            return;
+        }
+        const results = await Promise.allSettled(pending);
+        const failure = results.find((result) => result.status === 'rejected');
+        if (failure) {
+            throw failure.reason;
+        }
+    }
+    /**
+     * Enter the terminal transport state.
+     *
+     * The generic HTTP transport owns no persistent sockets, so close only
+     * prevents future exports and flush operations.
+     */
+    close() {
+        this.closed = true;
     }
     static areValidHeaders(headers) {
-        return Object.entries(headers).every(([name, value]) => typeof name === 'string' && typeof value === 'string');
+        return Object.entries(headers).every(([name, value]) => typeof name === 'string' &&
+            name.trim().length > 0 &&
+            !/[\r\n]/.test(name) &&
+            typeof value === 'string' &&
+            !/[\r\n]/.test(value));
     }
 }
 exports.HttpTransport = HttpTransport;

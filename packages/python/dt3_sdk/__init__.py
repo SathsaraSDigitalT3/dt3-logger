@@ -1,5 +1,6 @@
 """Public DT3 Commons Python SDK API."""
 
+from .context import logger_context
 from .factory import create_logger
 from .file_transport import FileTransport
 from .http_transport import HttpTransport, HttpTransportError
@@ -24,4 +25,5 @@ __all__ = [
     "ValidationErrorDetail",
     "ValidationResult",
     "create_logger",
+    "logger_context",
 ]

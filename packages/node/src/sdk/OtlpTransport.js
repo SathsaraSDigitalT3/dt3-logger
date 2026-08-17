@@ -39,6 +39,7 @@ class OtlpTransport {
     timeoutMs;
     headers;
     inFlight = new Set();
+    closed = false;
     /**
      * Create an OTLP/HTTP JSON transport.
      *
@@ -76,6 +77,9 @@ class OtlpTransport {
      * @throws OtlpTransportError if the request cannot be initiated.
      */
     export(event) {
+        if (this.closed) {
+            throw new OtlpTransportError('OTLP transport is closed');
+        }
         const payload = JSON.stringify(OtlpTransport.toOtlpPayload(event));
         const headers = Object.fromEntries(Object.entries(this.headers).filter(([name]) => name.toLowerCase() !== 'content-type'));
         headers['Content-Type'] = 'application/json';
@@ -125,6 +129,9 @@ class OtlpTransport {
      * with the first sanitized delivery failure.
      */
     async flush() {
+        if (this.closed) {
+            throw new OtlpTransportError('OTLP transport is closed');
+        }
         const pending = [...this.inFlight];
         if (pending.length === 0) {
             return;
@@ -134,6 +141,15 @@ class OtlpTransport {
         if (failure) {
             throw failure.reason;
         }
+    }
+    /**
+     * Enter the terminal transport state.
+     *
+     * The OTLP transport has no persistent resource to release, but closing is
+     * idempotent and prevents new exports and flushes.
+     */
+    close() {
+        this.closed = true;
     }
     /**
      * Map a final DT3 event into a standards-shaped OTLP Logs JSON export body.

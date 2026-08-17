@@ -12,6 +12,19 @@
 /** Generic key-value context bag attached to log events. */
 export type Context = Record<string, unknown>;
 
+/**
+ * Execution-scoped tracing and correlation metadata.
+ *
+ * These convenience property names are mapped to the canonical event fields
+ * `trace.id`, `span.id`, `parent.span.id`, and `correlation.id`.
+ */
+export interface LogContext {
+  traceId?: string;
+  spanId?: string;
+  parentSpanId?: string;
+  correlationId?: string;
+}
+
 /** Structured attributes attached to a log event. */
 export type Attributes = Record<string, unknown>;
 

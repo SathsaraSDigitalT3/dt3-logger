@@ -1,6 +1,7 @@
 import { Logger } from '../../api/Logger';
+import { LogContext } from '../../api/types';
 /**
- * Concrete DT3 logger that builds structured events and exports them to stdout.
+ * Concrete DT3 logger that builds, validates, and exports structured events.
  */
 export declare class LoggerImpl implements Logger {
     private readonly config;
@@ -12,6 +13,7 @@ export declare class LoggerImpl implements Logger {
     private readonly fileTransport?;
     private readonly httpTransport?;
     private readonly otlpTransport?;
+    private closed;
     /**
      * Create a logger from SDK configuration.
      *
@@ -19,8 +21,10 @@ export declare class LoggerImpl implements Logger {
      */
     constructor(config: Record<string, unknown>);
     private resolveValidationMode;
-    private resolveHttpHeaders;
-    private resolveOtlpHeaders;
+    private resolveHttpTimeout;
+    private resolveHeaders;
+    private ensureOpen;
+    private handleDeliveryFailure;
     private log;
     /**
      * Export a DEBUG log event.
@@ -29,6 +33,15 @@ export declare class LoggerImpl implements Logger {
      * @param context - Optional structured event context.
      */
     debug(message: string, context?: Record<string, unknown>): void;
+    /**
+     * Run a callback with trace and correlation context attached to all logs
+     * created in the callback's execution scope.
+     *
+     * @param context - Convenience trace and correlation identifiers.
+     * @param callback - Synchronous or asynchronous work to run in the scope.
+     * @returns The callback result.
+     */
+    withContext<T>(context: LogContext, callback: () => T): T;
     /**
      * Export an INFO log event.
      *
@@ -52,8 +65,17 @@ export declare class LoggerImpl implements Logger {
      */
     error(message: string, error?: Error, context?: Record<string, unknown>): void;
     /**
-     * Flush pending log events. OTLP delivery settles asynchronously, while the
-     * remaining exporters preserve their existing synchronous flush behavior.
+     * Settle delivery work initiated before the flush boundary.
+     *
+     * @returns A promise that rejects only when a delivery failure is configured
+     * to fail closed.
      */
     flush(): Promise<void>;
+    /**
+     * Close the logger and its active transport.
+     *
+     * Closing is idempotent. Subsequent logging and flush calls fail with a
+     * documented terminal-state error.
+     */
+    close(): void;
 }

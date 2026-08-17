@@ -23,6 +23,7 @@ export declare class OtlpTransport {
     private readonly timeoutMs;
     private readonly headers;
     private readonly inFlight;
+    private closed;
     /**
      * Create an OTLP/HTTP JSON transport.
      *
@@ -46,6 +47,13 @@ export declare class OtlpTransport {
      * with the first sanitized delivery failure.
      */
     flush(): Promise<void>;
+    /**
+     * Enter the terminal transport state.
+     *
+     * The OTLP transport has no persistent resource to release, but closing is
+     * idempotent and prevents new exports and flushes.
+     */
+    close(): void;
     /**
      * Map a final DT3 event into a standards-shaped OTLP Logs JSON export body.
      *

@@ -7,6 +7,7 @@ import traceback
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, Optional
 
+from dt3_sdk.context import get_active_logger_context
 from dt3_sdk.file_transport import FileTransport
 from dt3_sdk.http_transport import HttpTransport
 from dt3_sdk.masking import MaskingEngine
@@ -94,7 +95,11 @@ class LoggerImpl:
     ) -> None:
         """Create, mask, validate, and export one structured log event."""
         self._ensure_open()
-        caller_context = dict(context or {})
+        # ContextVars provide request/task-local state. Explicit per-event
+        # context intentionally wins over active scope values, preserving the
+        # logger's established caller-context precedence behavior.
+        caller_context = get_active_logger_context()
+        caller_context.update(context or {})
         event_name = caller_context.get("event.name")
         if not isinstance(event_name, str):
             event_name = "GENERIC_EVENT"

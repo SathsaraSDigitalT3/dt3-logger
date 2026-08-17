@@ -2,6 +2,53 @@
 
 The Java SDK provides synchronous structured logging with stdout, JSON Lines file, and HTTP JSON exporters. Events are always processed in the canonical order: masking, validation, then transport delivery.
 
+## Execution-scoped context propagation
+
+`LogContext` attaches trace and correlation metadata to all events created in a
+current-thread execution scope. It is useful for request handling, message
+processing, and other logical operations where repeatedly passing the same
+identifiers to every logging call would be error-prone.
+
+Use the returned scope with Java try-with-resources so context is restored even
+when the scoped work throws:
+
+```java
+Logger logger = LoggerFactory.createLogger(config);
+
+try (LogContext.Scope ignored = logger.withContext(
+    LogContext.builder()
+        .traceId("trace-123")
+        .spanId("span-123")
+        .parentSpanId("parent-123")
+        .correlationId("request-123")
+        .build()
+)) {
+    logger.info("Request started", Map.of("event.name", "REQUEST_STARTED"));
+    logger.info("Request completed", Map.of("event.name", "REQUEST_COMPLETED"));
+}
+```
+
+The builder maps values only to canonical fields:
+
+| Builder method | Canonical event field |
+| --- | --- |
+| `traceId(...)` | `trace.id` |
+| `spanId(...)` | `span.id` |
+| `parentSpanId(...)` | `parent.span.id` |
+| `correlationId(...)` | `correlation.id` |
+
+Nested scopes inherit context fields that they do not replace. Closing an inner
+scope restores its parent scope; closing the outer scope clears it for the
+current thread. Context uses `ThreadLocal`, so independent threads do not leak
+metadata into each other. The synchronous SDK intentionally does not
+automatically propagate context into work submitted to executors or other
+threads; establish a new scope inside such work.
+
+Final event precedence is: logger-owned fields, then explicit event context,
+then active scoped context. In other words, event-level `trace.id` or
+`correlation.id` values override scoped values for that event, while logger
+method severity and configured service metadata cannot be overridden.
+
 ## HTTP exporter
 
 Configure the HTTP exporter through `SdkConfig`:
