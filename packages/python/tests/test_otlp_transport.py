@@ -50,6 +50,19 @@ def _config(validation_mode: str = "LENIENT", **overrides: object) -> dict[str, 
     }
 
 
+def _canonical_config(**overrides: object) -> dict[str, object]:
+    """Build an OTLP configuration using the canonical millisecond timeout."""
+    return {
+        "service.name": "otlp-test-service",
+        "service.version": "1.2.3",
+        "deployment.environment": "test",
+        "exporter": "otlp",
+        "otlp.endpoint": "https://collector.example.test/v1/logs",
+        "exporter.otlp.timeout": 3500,
+        **overrides,
+    }
+
+
 def _payload(request: Any) -> dict[str, Any]:
     """Decode a captured OTLP JSON request body."""
     return json.loads(request.data.decode("utf-8"))
@@ -328,6 +341,65 @@ def test_logger_swallows_otlp_transport_errors_after_pipeline_processing(
     assert len(exported_events) == 1
     assert exported_events[0]["password"] == "***"
     assert exported_events[0]["dt3.security.masked_fields"] == ["password"]
+
+
+def test_otlp_logger_respects_configurable_fail_open(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """OTLP delivery errors must remain observable when fail_open is disabled."""
+
+    def failing_export(self: OtlpTransport, event: dict[str, Any]) -> None:
+        raise OtlpTransportError("collector unavailable")
+
+    monkeypatch.setattr(OtlpTransport, "export", failing_export)
+    logger = create_logger(_canonical_config(fail_open=False))
+
+    with pytest.raises(OtlpTransportError, match="collector unavailable"):
+        logger.info("Fail closed", {"event.name": "OTLP_FAIL_CLOSED"})
+
+
+def test_otlp_configuration_uses_millisecond_timeout_at_transport_boundary(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Canonical OTLP millisecond timeouts must convert only for urllib."""
+    captured: dict[str, Any] = {}
+
+    def successful_export(request: Any, timeout: float) -> _Response:
+        captured["timeout"] = timeout
+        return _Response()
+
+    monkeypatch.setattr("dt3_sdk.otlp_transport.urlopen", successful_export)
+    logger = create_logger(_canonical_config())
+
+    logger.info(
+        "Millisecond timeout",
+        {"event.name": "OTLP_TIMEOUT_CONFIGURATION", "severity": "DEBUG"},
+    )
+
+    assert captured["timeout"] == 3.5
+
+
+def test_otlp_method_severity_overrides_caller_context(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The OTLP payload must use method-selected severity, not caller severity."""
+    captured: dict[str, Any] = {}
+
+    def successful_export(request: Any, timeout: float) -> _Response:
+        captured["request"] = request
+        return _Response()
+
+    monkeypatch.setattr("dt3_sdk.otlp_transport.urlopen", successful_export)
+    logger = create_logger(_canonical_config())
+
+    logger.warn(
+        "Severity ownership",
+        {"event.name": "OTLP_SEVERITY_OWNERSHIP", "severity": "DEBUG"},
+    )
+
+    record = _record(_payload(captured["request"]))
+    assert record["severityText"] == "WARN"
+    assert record["severityNumber"] == 13
 
 
 def test_otlp_transport_propagates_http_connection_and_timeout_failures(

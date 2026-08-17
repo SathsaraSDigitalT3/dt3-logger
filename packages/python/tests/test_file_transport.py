@@ -111,6 +111,18 @@ def _config(file_path: Path, validation_mode: str = "LENIENT", **overrides: obje
     }
 
 
+def _canonical_config(file_path: Path, **overrides: object) -> dict[str, object]:
+    """Build a configuration using the canonical file destination key."""
+    return {
+        "service.name": "file-test-service",
+        "service.version": "1.0.0",
+        "deployment.environment": "test",
+        "exporter": "file",
+        "exporter.file.path": str(file_path),
+        **overrides,
+    }
+
+
 def _read_events(file_path: Path) -> list[dict[str, object]]:
     """Parse every non-empty JSONL line from a file transport destination."""
     return [
@@ -313,3 +325,57 @@ def test_file_exporter_requires_a_configured_file_path() -> None:
                 "exporter": "file",
             }
         )
+
+
+def test_canonical_file_path_wins_over_legacy_alias(tmp_path: Path) -> None:
+    """Canonical file configuration must take precedence over the legacy key."""
+    canonical_path = tmp_path / "canonical.jsonl"
+    legacy_path = tmp_path / "legacy.jsonl"
+    logger = create_logger(
+        _canonical_config(canonical_path, **{"file.path": str(legacy_path)})
+    )
+
+    logger.info("Canonical path", {"event.name": "CANONICAL_FILE_PATH"})
+    logger.close()
+
+    assert _read_events(canonical_path)[0]["event.name"] == "CANONICAL_FILE_PATH"
+    assert not legacy_path.exists()
+
+
+@pytest.mark.parametrize("fail_open", [True, False])
+def test_file_logger_applies_fail_open_to_export_failures(
+    tmp_path: Path,
+    fail_open: bool,
+) -> None:
+    """File write failures must follow the logger-level delivery policy."""
+    logger = create_logger(_canonical_config(tmp_path / "events.jsonl", fail_open=fail_open))
+    assert logger._file_transport is not None
+    logger._file_transport._file.close()
+    logger._file_transport._file = _FailingFile("write")
+
+    if fail_open:
+        logger.info("Continue", {"event.name": "FILE_FAIL_OPEN"})
+    else:
+        with pytest.raises(OSError, match="write failed"):
+            logger.info("Raise", {"event.name": "FILE_FAIL_CLOSED"})
+
+
+@pytest.mark.parametrize("operation", ["flush", "close"])
+@pytest.mark.parametrize("fail_open", [True, False])
+def test_file_logger_applies_fail_open_to_lifecycle_failures(
+    tmp_path: Path,
+    operation: str,
+    fail_open: bool,
+) -> None:
+    """File flush and close failures must use the delivery failure policy."""
+    logger = create_logger(_canonical_config(tmp_path / "events.jsonl", fail_open=fail_open))
+    assert logger._file_transport is not None
+    logger._file_transport._file.close()
+    logger._file_transport._file = _FailingFile("flush")
+
+    lifecycle_operation = logger.flush if operation == "flush" else logger.close
+    if fail_open:
+        lifecycle_operation()
+    else:
+        with pytest.raises(OSError, match="flush failed"):
+            lifecycle_operation()

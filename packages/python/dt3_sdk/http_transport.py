@@ -42,13 +42,19 @@ class HttpTransport:
 
         validated_headers: dict[str, str] = {}
         for name, value in (headers or {}).items():
-            if not isinstance(name, str):
+            if not isinstance(name, str) or not name.strip():
                 raise ValueError(
-                    f"http.headers contains a non-string header name: {name!r}"
+                    f"http.headers contains an invalid header name: {name!r}"
                 )
+            if "\r" in name or "\n" in name:
+                raise ValueError("http.headers contains an invalid header name")
             if not isinstance(value, str):
                 raise ValueError(
                     f"http.headers[{name!r}] must have a string header value; got {value!r}"
+                )
+            if "\r" in value or "\n" in value:
+                raise ValueError(
+                    f"http.headers[{name!r}] contains an invalid header value"
                 )
             validated_headers[name] = value
 

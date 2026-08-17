@@ -177,7 +177,13 @@ public final class HttpTransport implements LogTransport {
         for (Map.Entry<String, String> header : configuredHeaders.entrySet()) {
             String name = header.getKey();
             String value = header.getValue();
-            if (name == null || name.isBlank() || value == null) {
+            if (
+                name == null
+                || name.isBlank()
+                || value == null
+                || containsLineBreak(name)
+                || containsLineBreak(value)
+            ) {
                 throw new IllegalArgumentException(
                     "exporter.http.headers must be a mapping of non-blank string header names to string values"
                 );
@@ -186,5 +192,9 @@ public final class HttpTransport implements LogTransport {
         }
 
         return Map.copyOf(validated);
+    }
+
+    private boolean containsLineBreak(String value) {
+        return value.indexOf('\r') >= 0 || value.indexOf('\n') >= 0;
     }
 }

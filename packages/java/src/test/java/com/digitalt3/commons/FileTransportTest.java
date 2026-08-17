@@ -4,6 +4,7 @@ import com.digitalt3.commons.api.Logger;
 import com.digitalt3.commons.api.LoggerFactory;
 import com.digitalt3.commons.api.SdkConfig;
 import com.digitalt3.commons.api.ValidationMode;
+import com.digitalt3.commons.sdk.LogEventValidationException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.Test;
@@ -128,17 +129,15 @@ public class FileTransportTest {
 
     @Test
     public void strictValidationPreventsInvalidEventFromBeingWritten() throws IOException {
-        // Validation is tested with a genuinely invalid caller-supplied value (sdk.name as
-        // an integer), which is not a field that the logger method overrides. This ensures
-        // the STRICT validation behavior is exercised independently of logger severity.
+        // Attributes are caller-controlled and must reach validation unchanged.
         Path logFile = temporaryLogFile();
         SdkConfig config = fileConfig(logFile, true);
         config.setValidationMode(ValidationMode.STRICT);
         Logger logger = LoggerFactory.createLogger(config);
 
         assertThrows(
-            IllegalArgumentException.class,
-            () -> logger.info("Invalid type override", Map.of("sdk.name", 123))
+            LogEventValidationException.class,
+            () -> logger.info("Invalid type override", Map.of("attributes", "not-an-object"))
         );
 
         assertFalse(Files.exists(logFile));
@@ -146,15 +145,13 @@ public class FileTransportTest {
 
     @Test
     public void lenientValidationWritesDiagnostics() throws IOException {
-        // Validation is tested with a genuinely invalid caller-supplied value (sdk.name as
-        // an integer), which the logger does not override. This ensures the LENIENT
-        // validation diagnostic behavior is exercised independently of logger severity.
+        // LENIENT preserves invalid, non-sensitive caller-controlled values.
         Path logFile = temporaryLogFile();
         SdkConfig config = fileConfig(logFile, true);
         config.setValidationMode(ValidationMode.LENIENT);
         Logger logger = LoggerFactory.createLogger(config);
 
-        logger.info("Invalid type override", Map.of("sdk.name", 123));
+        logger.info("Invalid type override", Map.of("attributes", "not-an-object"));
 
         JsonNode event = readJsonLines(logFile).get(0);
         JsonNode errorsNode = event.path("dt3.validation.errors");
@@ -165,8 +162,13 @@ public class FileTransportTest {
 
         JsonNode validationError = errorsNode.get(0);
         assertNotNull("Expected the first validation diagnostic to be non-null", validationError);
-        assertEquals("sdk.name", validationError.path("field").asText());
+        assertEquals("attributes", validationError.path("field").asText());
         assertEquals("type", validationError.path("rule").asText());
+        assertEquals(
+            "LENIENT must retain a non-sensitive invalid value after attaching diagnostics",
+            "not-an-object",
+            event.path("attributes").asText()
+        );
     }
 
     /**

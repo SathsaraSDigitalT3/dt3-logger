@@ -5,6 +5,7 @@ import com.digitalt3.commons.api.LoggerFactory;
 import com.digitalt3.commons.api.SdkConfig;
 import com.digitalt3.commons.api.ValidationMode;
 import com.digitalt3.commons.sdk.HttpTransportError;
+import com.digitalt3.commons.sdk.LogEventValidationException;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 import org.junit.Test;
@@ -151,9 +152,7 @@ public class HttpTransportTest {
 
     @Test
     public void strictValidationPreventsHttpExportWhileLenientExportsDiagnostics() throws IOException {
-        // Validation is tested with a genuinely invalid caller-supplied value (sdk.name as
-        // an integer), which is not a field that the logger method overrides. This correctly
-        // separates the logger severity contract from the validation-mode behavior.
+        // `attributes` is caller-controlled, unlike logger-owned event metadata.
         CapturingServer strictServer = new CapturingServer(200, 0);
         try {
             SdkConfig strictConfig = httpConfig(strictServer.endpoint(), false, 1000);
@@ -161,8 +160,11 @@ public class HttpTransportTest {
             Logger strictLogger = LoggerFactory.createLogger(strictConfig);
 
             assertThrows(
-                IllegalArgumentException.class,
-                () -> strictLogger.info("Invalid type override", Map.of("sdk.name", 123))
+                LogEventValidationException.class,
+                () -> strictLogger.info(
+                    "Invalid type override",
+                    Map.of("attributes", "not-an-object")
+                )
             );
             assertTrue(strictServer.body.get() == null);
         } finally {
@@ -175,11 +177,15 @@ public class HttpTransportTest {
             lenientConfig.setValidationMode(ValidationMode.LENIENT);
             Logger lenientLogger = LoggerFactory.createLogger(lenientConfig);
 
-            lenientLogger.info("Invalid type override", Map.of("sdk.name", 123));
+            lenientLogger.info(
+                "Invalid type override",
+                Map.of("attributes", "not-an-object")
+            );
 
             assertTrue(lenientServer.body.get().contains("\"dt3.validation.errors\""));
-            assertTrue(lenientServer.body.get().contains("\"field\":\"sdk.name\""));
+            assertTrue(lenientServer.body.get().contains("\"field\":\"attributes\""));
             assertTrue(lenientServer.body.get().contains("\"rule\":\"type\""));
+            assertTrue(lenientServer.body.get().contains("\"attributes\":\"not-an-object\""));
         } finally {
             lenientServer.close();
         }
@@ -208,6 +214,51 @@ public class HttpTransportTest {
         config.setHttpTimeout(1_250);
 
         assertEquals(1_250, config.getHttpTimeout());
+    }
+
+    @Test
+    public void canonicalDotKeysOverrideLegacyHttpAliasesAndKeepMillisecondUnits() {
+        SdkConfig config = SdkConfig.fromMap(Map.of(
+            "exporter.http.endpoint", "http://canonical.example/events",
+            "http.endpoint", "http://legacy.example/events",
+            "exporter.http.timeout", 1_250,
+            "http.timeout", 50,
+            "exporter.http.headers", Map.of("X-Source", "canonical"),
+            "http.headers", Map.of("X-Source", "legacy"),
+            "fail_open", false
+        ));
+
+        assertEquals("http://canonical.example/events", config.getHttpEndpoint());
+        assertEquals(1_250, config.getHttpTimeout());
+        assertEquals("canonical", config.getHttpHeaders().get("X-Source"));
+        assertFalse(config.isFailOpen());
+    }
+
+    @Test
+    public void genericHttpHeadersRejectCarriageReturnAndLineFeedInjection() {
+        SdkConfig newlineName = httpConfig("http://127.0.0.1:1/events", false, 1_000);
+        newlineName.setHttpHeaders(Map.of("X-Injected\r\nHeader", "value"));
+
+        assertThrows(IllegalArgumentException.class, () -> LoggerFactory.createLogger(newlineName));
+
+        SdkConfig newlineValue = httpConfig("http://127.0.0.1:1/events", false, 1_000);
+        newlineValue.setHttpHeaders(Map.of("X-Valid", "value\r\nInjected: true"));
+
+        assertThrows(IllegalArgumentException.class, () -> LoggerFactory.createLogger(newlineValue));
+    }
+
+    @Test
+    public void loggerCloseIsIdempotentAndPreventsSubsequentFlushOrExport() {
+        Logger logger = LoggerFactory.createLogger(baseConfig());
+
+        logger.close();
+        logger.close();
+
+        assertThrows(
+            IllegalStateException.class,
+            () -> logger.info("Closed logger", Map.of("event.name", "CLOSED_LOGGER_EVENT"))
+        );
+        assertThrows(IllegalStateException.class, logger::flush);
     }
 
     private SdkConfig httpConfig(String endpoint, boolean failOpen, long timeout) {

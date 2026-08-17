@@ -4,6 +4,7 @@ import com.digitalt3.commons.api.Logger;
 import com.digitalt3.commons.api.LoggerFactory;
 import com.digitalt3.commons.api.SdkConfig;
 import com.digitalt3.commons.api.ValidationMode;
+import com.digitalt3.commons.sdk.LogEventValidationException;
 import org.junit.Test;
 
 import java.io.ByteArrayOutputStream;
@@ -50,13 +51,9 @@ public class MapValidationTest {
 
     @Test
     public void presentNullRequiredPropertyIsRejectedAsStructuredTypeError() {
-        // "severity" is intentionally excluded from this test: the logger method always
-        // controls severity and overwrites any caller-supplied null value before validation.
-        // That canonical behavior is verified separately in loggerMethodSeverityCannotBeOverriddenByCallerContext.
-        //
-        // All other required fields can be null-overridden via caller context and therefore
-        // generate a genuine "type" diagnostic without triggering a "required" diagnostic.
-        for (String field : requiredFields()) {
+        // Exercise only caller-controlled fields. Logger-owned canonical fields are reasserted
+        // after context merging and therefore cannot be made null by a caller.
+        for (String field : callerControlledFields()) {
             Map<String, Object> context = new LinkedHashMap<>();
             context.put(field, null);
 
@@ -64,13 +61,9 @@ public class MapValidationTest {
 
             assertTrue("Expected diagnostics for " + field, output.contains("\"dt3.validation.errors\""));
             assertStructuredError(output, field, "type", "Value has an invalid type");
-            assertFalse(
-                "A present-null value must not also be diagnosed as missing: " + field,
-                output.contains("\"rule\":\"required\"")
-            );
             assertTrue(
-                "Invalid type values must be redacted for " + field,
-                output.contains("\"" + field + "\":\"[REDACTED]\"")
+                "LENIENT must preserve the non-sensitive invalid value for " + field,
+                output.contains("\"" + field + "\":null")
             );
         }
     }
@@ -137,21 +130,83 @@ public class MapValidationTest {
     }
 
     @Test
+    public void missingServiceMetadataIsReportedRatherThanDefaultedToUnknown() {
+        SdkConfig config = validConfig(ValidationMode.LENIENT);
+        config.setServiceName(null);
+        config.setServiceVersion(null);
+        Logger logger = LoggerFactory.createLogger(config);
+        ByteArrayOutputStream stdout = new ByteArrayOutputStream();
+
+        captureStdout(stdout, () -> {
+            logger.info("Validation test", Map.of("event.name", "VALID_EVENT"));
+            logger.flush();
+        });
+
+        String output = stdout.toString(StandardCharsets.UTF_8).trim();
+
+        assertTrue(output.contains("\"dt3.validation.errors\""));
+        assertStructuredError(output, "service.name", "required", "Required property is missing");
+        assertStructuredError(output, "service.version", "required", "Required property is missing");
+        assertFalse(output.contains("\"service.name\":\"unknown\""));
+        assertFalse(output.contains("\"service.version\":\"unknown\""));
+    }
+
+    @Test
+    public void callerCannotSupplyMissingConfiguredServiceMetadata() {
+        SdkConfig config = validConfig(ValidationMode.LENIENT);
+        config.setServiceName(null);
+        config.setServiceVersion(null);
+        Logger logger = LoggerFactory.createLogger(config);
+        ByteArrayOutputStream stdout = new ByteArrayOutputStream();
+
+        captureStdout(stdout, () -> {
+            logger.info(
+                "Validation test",
+                Map.of(
+                    "event.name", "VALID_EVENT",
+                    "service.name", "caller-service",
+                    "service.version", "9.9.9"
+                )
+            );
+            logger.flush();
+        });
+
+        String output = stdout.toString(StandardCharsets.UTF_8).trim();
+
+        assertTrue(output.contains("\"dt3.validation.errors\""));
+        assertStructuredError(output, "service.name", "required", "Required property is missing");
+        assertStructuredError(output, "service.version", "required", "Required property is missing");
+        assertFalse(output.contains("\"service.name\":\"caller-service\""));
+        assertFalse(output.contains("\"service.version\":\"9.9.9\""));
+    }
+
+    @Test
+    public void configuredServiceMetadataIsEmittedWithoutDiagnostics() {
+        String output = emit(ValidationMode.LENIENT, Map.of("event.name", "VALID_EVENT"));
+
+        assertTrue(output.contains("\"service.name\":\"validation-test\""));
+        assertTrue(output.contains("\"service.version\":\"1.0.0\""));
+        assertFalse(output.contains("\"dt3.validation.errors\""));
+    }
+
+    @Test
     public void lenientModeValidatesCanonicalFieldTypes() {
         Map<String, Object> context = new LinkedHashMap<>();
-        context.put("sdk.name", 1);
-        context.put("service.version", 2);
-        context.put("deployment.environment", 3);
+        context.put("trace.id", 1);
+        context.put("span.id", 2);
+        context.put("parent.span.id", 3);
         context.put("correlation.id", 4);
         context.put("tenant.id", 5);
         context.put("tenant.region", 6);
         context.put("tenant.environment", 7);
         context.put("user.id", 8);
         context.put("session.id", 9);
+        context.put("duration.ms", "not-a-number");
         context.put("error.type", 10);
         context.put("error.message", 11);
         context.put("error.stack", 12);
         context.put("error.code", 13);
+        context.put("error.retryable", "not-a-boolean");
         context.put("attributes", java.util.List.of("not-an-object"));
 
         String output = emit(ValidationMode.LENIENT, context);
@@ -159,11 +214,15 @@ public class MapValidationTest {
         assertTrue(output.contains("\"dt3.validation.errors\""));
         for (String field : context.keySet()) {
             assertStructuredError(output, field, "type", "Value has an invalid type");
-            assertTrue(
-                "Invalid type values must be redacted for " + field,
-                output.contains("\"" + field + "\":\"[REDACTED]\"")
-            );
         }
+        assertTrue(
+            "\"correlation.id\" must retain its invalid numeric value",
+            output.contains("\"correlation.id\":4")
+        );
+        assertTrue(
+            "\"attributes\" must retain its invalid non-sensitive array value",
+            output.contains("\"attributes\":[\"not-an-object\"]")
+        );
     }
 
     @Test
@@ -176,7 +235,15 @@ public class MapValidationTest {
 
             assertTrue(output.contains("\"dt3.validation.errors\""));
             assertStructuredError(output, "attributes", "type", "Value has an invalid type");
-            assertTrue(output.contains("\"attributes\":\"[REDACTED]\""));
+            if (invalidAttributes == null) {
+                assertTrue(output.contains("\"attributes\":null"));
+            } else if (invalidAttributes instanceof java.util.List<?>) {
+                assertTrue(output.contains("\"attributes\":[\"array\"]"));
+            } else if (invalidAttributes instanceof String) {
+                assertTrue(output.contains("\"attributes\":\"scalar\""));
+            } else {
+                assertTrue(output.contains("\"attributes\":1"));
+            }
         }
     }
 
@@ -187,8 +254,8 @@ public class MapValidationTest {
         ByteArrayOutputStream stdout = new ByteArrayOutputStream();
 
         captureStdout(stdout, () -> assertThrows(
-            IllegalArgumentException.class,
-            () -> logger.info("Validation test", Map.of("sdk.name", 123))
+            LogEventValidationException.class,
+            () -> logger.info("Validation test", Map.of("attributes", "not-an-object"))
         ));
 
         assertEquals("", stdout.toString(StandardCharsets.UTF_8).trim());
@@ -199,8 +266,8 @@ public class MapValidationTest {
         SdkConfig config = validConfig(ValidationMode.STRICT);
         Logger logger = LoggerFactory.createLogger(config);
 
-        IllegalArgumentException exception = assertThrows(
-            IllegalArgumentException.class,
+        LogEventValidationException exception = assertThrows(
+            LogEventValidationException.class,
             () -> logger.info("Validation test", Map.of("attributes", "secret-invalid-value"))
         );
 
@@ -233,8 +300,14 @@ public class MapValidationTest {
 
         assertTrue(output.contains("\"dt3.validation.errors\""));
         assertStructuredError(output, "attributes", "type", "Value has an invalid type");
-        assertFalse(output.contains(secret));
-        assertTrue(output.contains("\"attributes\":\"[REDACTED]\""));
+        assertTrue(
+            "The original non-sensitive invalid value must remain in a LENIENT event",
+            output.contains("\"attributes\":\"" + secret + "\"")
+        );
+        assertFalse(
+            "Structured diagnostics must not repeat rejected caller values",
+            output.contains("\"message\":\"" + secret + "\"")
+        );
     }
 
     @Test
@@ -242,12 +315,12 @@ public class MapValidationTest {
         String output = emit(
             ValidationMode.OFF,
             Map.of(
-                "sdk.name", 1,
+                "correlation.id", 1,
                 "attributes", java.util.List.of("invalid")
             )
         );
 
-        assertTrue(output.contains("\"sdk.name\":1"));
+        assertTrue(output.contains("\"correlation.id\":1"));
         assertTrue(output.contains("\"attributes\":[\"invalid\"]"));
         assertFalse(output.contains("\"dt3.validation.errors\""));
     }
@@ -324,22 +397,26 @@ public class MapValidationTest {
         }
     }
 
-    private String[] requiredFields() {
-        // "severity" is intentionally excluded: the logger method always controls severity
-        // and overwrites any caller-supplied null before validation runs. This means a
-        // caller-supplied null severity never reaches the validator, so testing it here
-        // would test the wrong invariant. The logger severity override is tested in
-        // loggerMethodSeverityCannotBeOverriddenByCallerContext().
+    private String[] callerControlledFields() {
+        // These canonical fields are merged from caller context and are not reasserted by
+        // the logger. Logger-owned required fields are intentionally tested separately.
         return new String[] {
-            "timestamp",
-            "message",
-            "event.name",
-            "schema.version",
-            "sdk.name",
-            "sdk.version",
-            "service.name",
-            "service.version",
-            "deployment.environment"
+            "trace.id",
+            "span.id",
+            "parent.span.id",
+            "correlation.id",
+            "tenant.id",
+            "tenant.region",
+            "tenant.environment",
+            "user.id",
+            "session.id",
+            "duration.ms",
+            "error.type",
+            "error.message",
+            "error.stack",
+            "error.code",
+            "error.retryable",
+            "attributes"
         };
     }
 }

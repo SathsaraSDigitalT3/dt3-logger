@@ -1,0 +1,23 @@
+{
+  "purpose": "An event missing deployment.environment reports the canonical required-field diagnostic without exposing event values.",
+  "event": {
+    "timestamp": "2026-08-13T12:00:00.000Z",
+    "severity": "INFO",
+    "message": "contains-secret-value",
+    "event.name": "MISSING_DEPLOYMENT_ENVIRONMENT",
+    "schema.version": "1.0.0",
+    "sdk.name": "dt3-cross-language-fixture",
+    "sdk.version": "0.1.0",
+    "service.name": "fixture-service",
+    "service.version": "1.0.0"
+  },
+  "expected": {
+    "valid": false,
+    "errors": [
+      {
+        "field": "deployment.environment",
+        "rule": "required"
+      }
+    ]
+  }
+}

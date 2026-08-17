@@ -45,6 +45,19 @@ def _config(validation_mode: str = "LENIENT", **overrides: object) -> dict[str, 
     }
 
 
+def _canonical_config(**overrides: object) -> dict[str, object]:
+    """Build a configuration using canonical HTTP keys and millisecond timeout."""
+    return {
+        "service.name": "http-test-service",
+        "service.version": "1.0.0",
+        "deployment.environment": "test",
+        "exporter": "http",
+        "exporter.http.endpoint": "https://canonical.example.test/v1/events",
+        "exporter.http.timeout": 3500,
+        **overrides,
+    }
+
+
 def _captured_event(request: Any) -> dict[str, object]:
     """Decode a UTF-8 JSON request payload captured from the transport."""
     return json.loads(request.data.decode("utf-8"))
@@ -89,8 +102,11 @@ def test_http_exporter_posts_final_json_payload_with_content_type_and_headers(
     ("headers", "message"),
     [
         (["Authorization", "Bearer integration-token"], "http.headers must be a mapping"),
-        ({1: "Bearer integration-token"}, "non-string header name"),
+        ({1: "Bearer integration-token"}, "invalid header name"),
+        ({" ": "Bearer integration-token"}, "invalid header name"),
+        ({"X-Unsafe\r\nInjected": "value"}, "invalid header name"),
         ({"Authorization": 123}, "string header value"),
+        ({"X-Unsafe": "value\r\nInjected: true"}, "invalid header value"),
     ],
 )
 def test_http_transport_rejects_invalid_headers_at_construction(
@@ -333,6 +349,70 @@ def test_http_transport_flush_and_close_lifecycle(
         transport.flush()
     with pytest.raises(RuntimeError, match="HTTP transport is closed"):
         transport.export({"event.name": "CLOSED_TRANSPORT"})
+
+
+def test_canonical_http_configuration_wins_over_legacy_alias_and_uses_milliseconds(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Canonical exporter keys must win over Python aliases and convert to seconds."""
+    captured: dict[str, object] = {}
+
+    def fake_urlopen(request: Any, timeout: float) -> _Response:
+        captured["request"] = request
+        captured["timeout"] = timeout
+        return _Response()
+
+    monkeypatch.setattr("dt3_sdk.http_transport.urlopen", fake_urlopen)
+    logger = create_logger(
+        _canonical_config(
+            **{
+                "http.endpoint": "https://legacy.example.test/events",
+                "http.timeout": 0.25,
+                "exporter.http.headers": {"X-Canonical": "yes"},
+                "http.headers": {"X-Legacy": "no"},
+            }
+        )
+    )
+
+    logger.info("Canonical configuration", {"event.name": "CANONICAL_HTTP"})
+
+    request = captured["request"]
+    assert request.full_url == "https://canonical.example.test/v1/events"
+    assert captured["timeout"] == 3.5
+    assert request.get_header("X-canonical") == "yes"
+    assert request.get_header("X-legacy") is None
+
+
+@pytest.mark.parametrize("fail_open", [True, False])
+def test_http_logger_applies_fail_open_only_to_delivery_failures(
+    monkeypatch: pytest.MonkeyPatch,
+    fail_open: bool,
+) -> None:
+    """HTTP transport failures must be swallowed only when fail_open is enabled."""
+
+    def failing_urlopen(request: Any, timeout: float) -> _Response:
+        raise URLError("collector unavailable")
+
+    monkeypatch.setattr("dt3_sdk.http_transport.urlopen", failing_urlopen)
+    logger = create_logger(_canonical_config(fail_open=fail_open))
+
+    if fail_open:
+        logger.info("Continue", {"event.name": "HTTP_FAIL_OPEN"})
+    else:
+        with pytest.raises(HttpTransportError, match="collector unavailable"):
+            logger.info("Raise", {"event.name": "HTTP_FAIL_CLOSED"})
+
+
+@pytest.mark.parametrize("fail_open", [True, False])
+def test_http_logger_rejects_closed_lifecycle_operations(
+    fail_open: bool,
+) -> None:
+    """Closed loggers must reject lifecycle work regardless of fail-open policy."""
+    logger = create_logger(_canonical_config(fail_open=fail_open))
+    logger.close()
+
+    with pytest.raises(RuntimeError, match="Logger is closed"):
+        logger.flush()
 
 
 def test_stdout_exporter_behavior_remains_unaffected(capsys) -> None:

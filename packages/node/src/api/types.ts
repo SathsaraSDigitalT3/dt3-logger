@@ -189,7 +189,10 @@ export interface SdkConfig {
   /** HTTP endpoint when exporter is `'http'` or `'otlp'`. */
   'exporter.http.endpoint'?: string;
 
-  /** HTTP request timeout in milliseconds.  Defaults to `5000`. */
+  /** Canonical HTTP request timeout in milliseconds. Defaults to `5000`. */
+  'exporter.http.timeout'?: number;
+
+  /** @deprecated Use `exporter.http.timeout`; the canonical key takes precedence. */
   'exporter.http.timeout_ms'?: number;
 
   /** Optional HTTP request headers for the HTTP exporter. */

@@ -212,9 +212,7 @@ public class OtlpTransportTest {
             maskingServer.close();
         }
 
-        // --- STRICT validation: genuinely invalid value (sdk.name as int) prevents export ---
-        // Validation is exercised with a field not controlled by the logger method,
-        // so that STRICT validation is correctly tested independent of severity behavior.
+        // --- STRICT validation: caller-controlled invalid attributes prevent export ---
         CapturingServer strictServer = new CapturingServer(200, 0);
         try {
             SdkConfig strictConfig = otlpConfig(strictServer.endpoint(), false, 1_000);
@@ -222,29 +220,42 @@ public class OtlpTransportTest {
             Logger strictLogger = LoggerFactory.createLogger(strictConfig);
 
             assertThrows(
-                IllegalArgumentException.class,
-                () -> strictLogger.info("Invalid type override", Map.of("sdk.name", 123))
+                com.digitalt3.commons.sdk.LogEventValidationException.class,
+                () -> strictLogger.info("Invalid type override", Map.of("attributes", "not-an-object"))
             );
             assertTrue(strictServer.completedRequests.isEmpty());
         } finally {
             strictServer.close();
         }
 
-        // --- LENIENT validation: genuinely invalid value exports with diagnostics ---
+        // --- LENIENT validation: caller-controlled invalid values export unchanged with diagnostics ---
         CapturingServer lenientServer = new CapturingServer(200, 0);
         try {
             SdkConfig lenientConfig = otlpConfig(lenientServer.endpoint(), false, 1_000);
             lenientConfig.setValidationMode(ValidationMode.LENIENT);
             Logger lenientLogger = LoggerFactory.createLogger(lenientConfig);
 
-            lenientLogger.info("Invalid type override", Map.of("sdk.name", 123));
+            lenientLogger.info("Invalid type override", Map.of("attributes", "not-an-object"));
 
             CapturingServer.CompletedRequest request = lenientServer.request();
-            JsonNode diagnostics = findAttribute(
+            JsonNode diagnosticAttribute = findAttribute(
                 logRecord(payload(request)).path("attributes"),
                 "dt3.validation.errors"
             );
-            assertTrue(diagnostics.path("value").has("arrayValue"));
+            JsonNode diagnostics = diagnosticAttribute.path("value").path("arrayValue").path("values");
+            assertTrue(diagnostics.isArray());
+            assertEquals(1, diagnostics.size());
+
+            JsonNode diagnosticFields = diagnostics.get(0).path("kvlistValue").path("values");
+            assertAttribute(diagnosticFields, "field", "stringValue", "attributes");
+            assertAttribute(diagnosticFields, "message", "stringValue", "Value has an invalid type");
+            assertAttribute(diagnosticFields, "rule", "stringValue", "type");
+            assertAttribute(
+                logRecord(payload(request)).path("attributes"),
+                "attributes",
+                "stringValue",
+                "not-an-object"
+            );
         } finally {
             lenientServer.close();
         }

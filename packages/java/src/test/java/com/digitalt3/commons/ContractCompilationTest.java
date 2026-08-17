@@ -35,6 +35,23 @@ public class ContractCompilationTest {
     }
 
     @Test
+    public void logEventTypedGetterContractsRemainSourceCompatible() {
+        LogEvent event = LogEvent.builder()
+            .durationMs(12.5)
+            .errorRetryable(true)
+            .attributes(Map.of("request.id", "request-1"))
+            .build();
+
+        Double duration = event.getDurationMs();
+        Boolean retryable = event.getErrorRetryable();
+        Map<String, Object> attributes = event.getAttributes();
+
+        assertEquals(Double.valueOf(12.5), duration);
+        assertEquals(Boolean.TRUE, retryable);
+        assertEquals("request-1", attributes.get("request.id"));
+    }
+
+    @Test
     public void testTraceContext() {
         TraceContext ctx = new TraceContext(
             "4bf92f3577b34da6a3ce929d0e0e4736",

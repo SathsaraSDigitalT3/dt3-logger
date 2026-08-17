@@ -32,6 +32,194 @@ public class SdkConfig {
     private String maskingReplacementValue = "[REDACTED]";
     private boolean maskingTrackMaskedFields;
 
+    // PUBLIC_INTERFACE
+    /**
+     * Create SDK configuration from canonical dot-keyed values.
+     *
+     * <p>Canonical keys take precedence over legacy aliases. Supported aliases
+     * are {@code file.path}, {@code http.endpoint}, {@code http.timeout}, and
+     * {@code http.headers}; they are retained only for compatibility. Timeouts
+     * supplied through either key form are milliseconds.</p>
+     *
+     * @param values configuration values keyed by canonical dot-key names
+     * @return populated SDK configuration
+     * @throws IllegalArgumentException when a recognized value has the wrong type
+     */
+    public static SdkConfig fromMap(Map<String, ?> values) {
+        SdkConfig config = new SdkConfig();
+        config.apply(values);
+        return config;
+    }
+
+    // PUBLIC_INTERFACE
+    /**
+     * Apply canonical dot-keyed configuration values to this instance.
+     *
+     * <p>Canonical values win whenever both canonical and supported legacy
+     * aliases are supplied. Unknown keys are ignored so callers can share a
+     * configuration map across SDK versions.</p>
+     *
+     * @param values configuration values keyed by canonical dot-key names
+     * @throws IllegalArgumentException when a recognized value has the wrong type
+     */
+    public void apply(Map<String, ?> values) {
+        if (values == null) {
+            return;
+        }
+
+        setStringIfPresent(values, "service.name", this::setServiceName);
+        setStringIfPresent(values, "service.version", this::setServiceVersion);
+        setStringIfPresent(values, "deployment.environment", this::setDeploymentEnvironment);
+        setStringIfPresent(values, "schema.version", this::setSchemaVersion);
+        setStringIfPresent(values, "sdk.name", this::setSdkName);
+        setStringIfPresent(values, "sdk.version", this::setSdkVersion);
+        setStringIfPresent(values, "exporter", this::setExporter);
+        setStringIfPresent(
+            values,
+            preferredKey(values, "exporter.file.path", "file.path"),
+            this::setFilePath
+        );
+        setStringIfPresent(
+            values,
+            preferredKey(values, "exporter.http.endpoint", "http.endpoint"),
+            this::setHttpEndpoint
+        );
+        setLongIfPresent(
+            values,
+            preferredKey(values, "exporter.http.timeout", "http.timeout"),
+            this::setHttpTimeout
+        );
+        setHeadersIfPresent(
+            values,
+            preferredKey(values, "exporter.http.headers", "http.headers"),
+            this::setHttpHeaders
+        );
+        setStringIfPresent(values, "otlp.endpoint", this::setOtlpEndpoint);
+        setLongIfPresent(values, "otlp.timeout", this::setOtlpTimeout);
+        setHeadersIfPresent(values, "otlp.headers", this::setOtlpHeaders);
+        setBooleanIfPresent(values, "masking.enabled", this::setMaskingEnabled);
+        setStringListIfPresent(values, "masking.fields", this::setMaskingFields);
+
+        Object failOpenValue = values.get("fail_open");
+        if (failOpenValue != null) {
+            if (!(failOpenValue instanceof Boolean booleanValue)) {
+                throw new IllegalArgumentException("fail_open must be a boolean");
+            }
+            setFailOpen(booleanValue);
+        }
+
+        Object validationModeValue = values.get("validation.mode");
+        if (validationModeValue != null) {
+            if (!(validationModeValue instanceof String modeName)) {
+                throw new IllegalArgumentException("validation.mode must be a string");
+            }
+            try {
+                setValidationMode(ValidationMode.valueOf(modeName.toUpperCase()));
+            } catch (IllegalArgumentException exception) {
+                throw new IllegalArgumentException(
+                    "validation.mode must be STRICT, LENIENT, or OFF",
+                    exception
+                );
+            }
+        }
+    }
+
+    private static String preferredKey(Map<String, ?> values, String canonicalKey, String legacyKey) {
+        return values.containsKey(canonicalKey) ? canonicalKey : legacyKey;
+    }
+
+    private void setStringIfPresent(
+        Map<String, ?> values,
+        String key,
+        java.util.function.Consumer<String> setter
+    ) {
+        Object value = values.get(key);
+        if (value == null) {
+            return;
+        }
+        if (!(value instanceof String stringValue)) {
+            throw new IllegalArgumentException(key + " must be a string");
+        }
+        setter.accept(stringValue);
+    }
+
+    private void setLongIfPresent(
+        Map<String, ?> values,
+        String key,
+        java.util.function.LongConsumer setter
+    ) {
+        Object value = values.get(key);
+        if (value == null) {
+            return;
+        }
+        if (!(value instanceof Number numberValue)) {
+            throw new IllegalArgumentException(key + " must be a number of milliseconds");
+        }
+        setter.accept(numberValue.longValue());
+    }
+
+    private void setBooleanIfPresent(
+        Map<String, ?> values,
+        String key,
+        java.util.function.Consumer<Boolean> setter
+    ) {
+        Object value = values.get(key);
+        if (value == null) {
+            return;
+        }
+        if (!(value instanceof Boolean booleanValue)) {
+            throw new IllegalArgumentException(key + " must be a boolean");
+        }
+        setter.accept(booleanValue);
+    }
+
+    private void setStringListIfPresent(
+        Map<String, ?> values,
+        String key,
+        java.util.function.Consumer<List<String>> setter
+    ) {
+        Object value = values.get(key);
+        if (value == null) {
+            return;
+        }
+        if (!(value instanceof List<?> rawFields)) {
+            throw new IllegalArgumentException(key + " must be a list of strings");
+        }
+
+        List<String> fields = new ArrayList<>();
+        for (Object field : rawFields) {
+            if (!(field instanceof String stringField)) {
+                throw new IllegalArgumentException(key + " must be a list of strings");
+            }
+            fields.add(stringField);
+        }
+        setter.accept(fields);
+    }
+
+    @SuppressWarnings("unchecked")
+    private void setHeadersIfPresent(
+        Map<String, ?> values,
+        String key,
+        java.util.function.Consumer<Map<String, String>> setter
+    ) {
+        Object value = values.get(key);
+        if (value == null) {
+            return;
+        }
+        if (!(value instanceof Map<?, ?> rawHeaders)) {
+            throw new IllegalArgumentException(key + " must be a map of string values");
+        }
+
+        Map<String, String> headers = new LinkedHashMap<>();
+        for (Map.Entry<?, ?> entry : rawHeaders.entrySet()) {
+            if (!(entry.getKey() instanceof String name) || !(entry.getValue() instanceof String headerValue)) {
+                throw new IllegalArgumentException(key + " must be a map of string values");
+            }
+            headers.put(name, headerValue);
+        }
+        setter.accept(headers);
+    }
+
     public String getServiceName() { return serviceName; }
     public void setServiceName(String serviceName) { this.serviceName = serviceName; }
     public String getServiceVersion() { return serviceVersion; }

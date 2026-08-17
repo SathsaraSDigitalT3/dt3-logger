@@ -18,6 +18,23 @@ public interface Validator {
      */
     ValidationResult validate(LogEvent event);
 
+    // PUBLIC_INTERFACE
+    /**
+     * Validate a log event using the selected validation mode.
+     *
+     * <p>STRICT mode throws a dedicated validation exception when the event is
+     * invalid, LENIENT mode returns diagnostics, and OFF mode skips validation.
+     * Implementations that predate selectable validation may preserve their
+     * existing default through {@link #validate(LogEvent)}.</p>
+     *
+     * @param event the log event to validate
+     * @param mode selected validation behavior
+     * @return a structured validation result
+     */
+    default ValidationResult validate(LogEvent event, ValidationMode mode) {
+        return validate(event);
+    }
+
     /**
      * A sanitized schema-validation diagnostic matching the canonical
      * validation-result contract.

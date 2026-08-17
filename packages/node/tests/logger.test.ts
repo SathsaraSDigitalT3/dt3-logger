@@ -209,6 +209,17 @@ describe('LoggerImpl behavior', () => {
     expect(typeof event.timestamp).toBe('string');
   });
 
+  it('keeps logger-method severity when caller context attempts to override it', () => {
+    const logger = createLogger(baseConfig());
+
+    logger.warn('Reserved severity', {
+      'event.name': 'RESERVED_SEVERITY',
+      severity: 'ERROR',
+    });
+
+    expect(readExportedEvent(logSpy).severity).toBe('WARN');
+  });
+
   it('exports error detail, stack, tenant fields, and structured attributes', () => {
     const logger = createLogger(baseConfig());
     const error = new Error('database unavailable');
@@ -301,7 +312,8 @@ describe('LoggerImpl behavior', () => {
 
     const event = readExportedEvent(logSpy);
     expect(event['event.name']).toBe('not-valid');
-    expect(event.timestamp).toBe('not-a-date-time');
+    expect(typeof event.timestamp).toBe('string');
+    expect(event.timestamp).not.toBe('not-a-date-time');
     expect(event['dt3.validation.errors']).toBeUndefined();
   });
 
@@ -461,6 +473,26 @@ describe('HTTP transport', () => {
     }
   });
 
+  it('prefers canonical exporter.http.timeout over the deprecated _ms alias', async () => {
+    const { server, endpoint } = await startHttpServer(() => undefined);
+
+    try {
+      const logger = createLogger(
+        baseConfig(ValidationMode.STRICT, {
+          exporter: 'http',
+          'exporter.http.endpoint': endpoint,
+          'exporter.http.timeout': 1000,
+          'exporter.http.timeout_ms': 0,
+        }),
+      );
+
+      logger.info('Canonical timeout', { 'event.name': 'CANONICAL_TIMEOUT' });
+      await expect(logger.flush()).resolves.toBeUndefined();
+    } finally {
+      await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
+    }
+  });
+
   it('masks sensitive fields before sending an HTTP request', async () => {
     let capturedPayload = '';
     let resolveRequest: (() => void) | undefined;
@@ -546,6 +578,71 @@ describe('HTTP transport', () => {
     } finally {
       exportSpy.mockRestore();
     }
+  });
+
+  it('makes a non-2xx HTTP response observable through fail-closed flush', async () => {
+    const server = createServer((request, response) => {
+      request.resume();
+      request.on('end', () => {
+        response.writeHead(500);
+        response.end();
+      });
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const address = server.address();
+    if (address === null || typeof address === 'string') {
+      throw new Error('Unable to determine HTTP test server address');
+    }
+
+    try {
+      const logger = createLogger(
+        baseConfig(ValidationMode.STRICT, {
+          exporter: 'http',
+          fail_open: false,
+          'exporter.http.endpoint': `http://127.0.0.1:${address.port}/v1/events`,
+        }),
+      );
+
+      logger.info('HTTP failure', { 'event.name': 'HTTP_EXPORT_FAILED' });
+      await expect(logger.flush()).rejects.toThrow('HTTP export failed with status 500');
+    } finally {
+      await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
+    }
+  });
+
+  it('swallows asynchronous HTTP delivery failures when fail_open is enabled', async () => {
+    const logger = createLogger(
+      baseConfig(ValidationMode.STRICT, {
+        exporter: 'http',
+        fail_open: true,
+        'exporter.http.endpoint': 'http://127.0.0.1:65534/v1/events',
+      }),
+    );
+
+    logger.info('HTTP unavailable', { 'event.name': 'HTTP_EXPORT_FAILED' });
+    await expect(logger.flush()).resolves.toBeUndefined();
+  });
+
+  it('rejects unsafe generic HTTP headers during initialization', () => {
+    expect(() =>
+      createLogger(
+        baseConfig(ValidationMode.STRICT, {
+          exporter: 'http',
+          'exporter.http.endpoint': 'http://collector.example.test/v1/events',
+          'exporter.http.headers': { 'X-Unsafe': 'value\r\nInjected: true' },
+        }),
+      )
+    ).toThrow('exporter.http.headers must be a mapping of safe string header names to string values');
+  });
+
+  it('closes idempotently and rejects subsequent logging and flush operations', async () => {
+    const logger = createLogger(baseConfig());
+
+    logger.close();
+    logger.close();
+
+    expect(() => logger.info('Closed', { 'event.name': 'CLOSED_LOGGER' })).toThrow('Logger is closed');
+    await expect(logger.flush()).rejects.toThrow('Logger is closed');
   });
 
   it('sends LENIENT validation diagnostics to HTTP', async () => {

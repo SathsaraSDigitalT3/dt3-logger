@@ -1,0 +1,29 @@
+{
+  "purpose": "A complete canonical event with optional tenant, error, and nested attribute fields validates successfully.",
+  "event": {
+    "timestamp": "2026-08-13T12:00:00.000Z",
+    "severity": "ERROR",
+    "message": "Request failed",
+    "event.name": "REQUEST_FAILED",
+    "schema.version": "1.0.0",
+    "sdk.name": "dt3-cross-language-fixture",
+    "sdk.version": "0.1.0",
+    "service.name": "fixture-service",
+    "service.version": "1.0.0",
+    "deployment.environment": "test",
+    "tenant.id": "tenant-42",
+    "tenant.region": "us-east",
+    "error.type": "FixtureError",
+    "error.message": "operation failed",
+    "error.retryable": false,
+    "attributes": {
+      "request": {
+        "attempt": 2
+      }
+    }
+  },
+  "expected": {
+    "valid": true,
+    "errors": []
+  }
+}

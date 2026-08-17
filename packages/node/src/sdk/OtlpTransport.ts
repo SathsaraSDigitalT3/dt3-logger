@@ -40,6 +40,7 @@ export class OtlpTransport {
   private readonly timeoutMs: number;
   private readonly headers: Headers;
   private readonly inFlight = new Set<Promise<void>>();
+  private closed = false;
 
   /**
    * Create an OTLP/HTTP JSON transport.
@@ -81,6 +82,10 @@ export class OtlpTransport {
    * @throws OtlpTransportError if the request cannot be initiated.
    */
   public export(event: LogEvent): void {
+    if (this.closed) {
+      throw new OtlpTransportError('OTLP transport is closed');
+    }
+
     const payload = JSON.stringify(OtlpTransport.toOtlpPayload(event));
     const headers = Object.fromEntries(
       Object.entries(this.headers).filter(([name]) => name.toLowerCase() !== 'content-type'),
@@ -145,6 +150,10 @@ export class OtlpTransport {
    * with the first sanitized delivery failure.
    */
   public async flush(): Promise<void> {
+    if (this.closed) {
+      throw new OtlpTransportError('OTLP transport is closed');
+    }
+
     const pending = [...this.inFlight];
     if (pending.length === 0) {
       return;
@@ -157,6 +166,16 @@ export class OtlpTransport {
     if (failure) {
       throw failure.reason;
     }
+  }
+
+  /**
+   * Enter the terminal transport state.
+   *
+   * The OTLP transport has no persistent resource to release, but closing is
+   * idempotent and prevents new exports and flushes.
+   */
+  public close(): void {
+    this.closed = true;
   }
 
   /**

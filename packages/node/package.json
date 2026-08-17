@@ -5,8 +5,9 @@
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "scripts": {
-    "build": "tsc",
-    "test": "jest",
+    "verify:schema": "node scripts/verify-canonical-schema.js",
+    "build": "npm run verify:schema && tsc",
+    "test": "npm run verify:schema && jest",
     "lint": "eslint \"src/**/*.ts\" \"tests/**/*.ts\""
   },
   "dependencies": {

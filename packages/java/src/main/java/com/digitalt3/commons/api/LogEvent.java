@@ -34,13 +34,22 @@ public class LogEvent {
     private String userId;
     private String sessionId;
     private Double durationMs;
+    /**
+     * Adapter-only duration representation used to preserve malformed shared
+     * fixture values for canonical validation without widening the public API.
+     */
+    private Object rawDurationMs;
     private String errorType;
     private String errorMessage;
     private String errorStack;
     private String errorCode;
     private Boolean errorRetryable;
+    /** Adapter-only raw value retained for canonical fixture validation. */
+    private Object rawErrorRetryable;
     private Map<String, Object> attributes;
-    private List<String> validationErrors;
+    /** Adapter-only raw value retained for canonical fixture validation. */
+    private Object rawAttributes;
+    private List<Validator.ValidationErrorDetail> validationErrors;
     private List<String> maskedFields;
 
     // Builder pattern
@@ -86,7 +95,10 @@ public class LogEvent {
     public String getSessionId() { return sessionId; }
     public void setSessionId(String sessionId) { this.sessionId = sessionId; }
     public Double getDurationMs() { return durationMs; }
-    public void setDurationMs(Double durationMs) { this.durationMs = durationMs; }
+    public void setDurationMs(Double durationMs) {
+        this.durationMs = durationMs;
+        this.rawDurationMs = durationMs;
+    }
     public String getErrorType() { return errorType; }
     public void setErrorType(String errorType) { this.errorType = errorType; }
     public String getErrorMessage() { return errorMessage; }
@@ -96,11 +108,19 @@ public class LogEvent {
     public String getErrorCode() { return errorCode; }
     public void setErrorCode(String errorCode) { this.errorCode = errorCode; }
     public Boolean getErrorRetryable() { return errorRetryable; }
-    public void setErrorRetryable(Boolean errorRetryable) { this.errorRetryable = errorRetryable; }
+    public void setErrorRetryable(Boolean errorRetryable) {
+        this.errorRetryable = errorRetryable;
+        this.rawErrorRetryable = errorRetryable;
+    }
     public Map<String, Object> getAttributes() { return attributes; }
-    public void setAttributes(Map<String, Object> attributes) { this.attributes = attributes; }
-    public List<String> getValidationErrors() { return validationErrors; }
-    public void setValidationErrors(List<String> errors) { this.validationErrors = errors; }
+    public void setAttributes(Map<String, Object> attributes) {
+        this.attributes = attributes;
+        this.rawAttributes = attributes;
+    }
+    public List<Validator.ValidationErrorDetail> getValidationErrors() { return validationErrors; }
+    public void setValidationErrors(List<Validator.ValidationErrorDetail> errors) {
+        this.validationErrors = errors;
+    }
     public List<String> getMaskedFields() { return maskedFields; }
     public void setMaskedFields(List<String> maskedFields) { this.maskedFields = maskedFields; }
 
@@ -128,15 +148,26 @@ public class LogEvent {
         if (tenantEnvironment != null) map.put("tenant.environment", tenantEnvironment);
         if (userId != null) map.put("user.id", userId);
         if (sessionId != null) map.put("session.id", sessionId);
-        if (durationMs != null) map.put("duration.ms", durationMs);
+        Object durationValue = rawDurationMs != null ? rawDurationMs : durationMs;
+        if (durationValue != null) map.put("duration.ms", durationValue);
         if (errorType != null) map.put("error.type", errorType);
         if (errorMessage != null) map.put("error.message", errorMessage);
         if (errorStack != null) map.put("error.stack", errorStack);
         if (errorCode != null) map.put("error.code", errorCode);
-        if (errorRetryable != null) map.put("error.retryable", errorRetryable);
-        if (attributes != null) {
-            map.put("attributes", attributes);
-            map.putAll(attributes);
+        Object retryableValue = rawErrorRetryable != null ? rawErrorRetryable : errorRetryable;
+        if (retryableValue != null) map.put("error.retryable", retryableValue);
+        Object attributesValue = rawAttributes != null ? rawAttributes : attributes;
+        if (attributesValue != null) {
+            map.put("attributes", attributesValue);
+            if (attributesValue instanceof Map<?, ?> rawAttributeMap) {
+                Map<String, Object> nestedAttributes = new HashMap<>();
+                for (Map.Entry<?, ?> entry : rawAttributeMap.entrySet()) {
+                    if (entry.getKey() instanceof String key) {
+                        nestedAttributes.put(key, entry.getValue());
+                    }
+                }
+                map.putAll(nestedAttributes);
+            }
         }
         if (validationErrors != null) map.put("dt3.validation.errors", validationErrors);
         if (maskedFields != null) map.put("dt3.security.masked_fields", maskedFields);
@@ -159,7 +190,33 @@ public class LogEvent {
         public Builder spanId(String v) { event.spanId = v; return this; }
         public Builder correlationId(String v) { event.correlationId = v; return this; }
         public Builder tenantId(String v) { event.tenantId = v; return this; }
-        public Builder attributes(Map<String, Object> v) { event.attributes = v; return this; }
+        public Builder durationMs(Double v) {
+            event.durationMs = v;
+            event.rawDurationMs = v;
+            return this;
+        }
+        Builder rawDurationMs(Object v) {
+            event.rawDurationMs = v;
+            return this;
+        }
+        public Builder errorRetryable(Boolean v) {
+            event.errorRetryable = v;
+            event.rawErrorRetryable = v;
+            return this;
+        }
+        Builder rawErrorRetryable(Object v) {
+            event.rawErrorRetryable = v;
+            return this;
+        }
+        public Builder attributes(Map<String, Object> v) {
+            event.attributes = v;
+            event.rawAttributes = v;
+            return this;
+        }
+        Builder rawAttributes(Object v) {
+            event.rawAttributes = v;
+            return this;
+        }
         public LogEvent build() { return event; }
     }
 }
