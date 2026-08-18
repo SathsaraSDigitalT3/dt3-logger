@@ -7,6 +7,7 @@ import traceback
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, Optional
 
+from dt3_sdk.batching import EventBatcher
 from dt3_sdk.context import get_active_logger_context
 from dt3_sdk.file_transport import FileTransport
 from dt3_sdk.http_transport import HttpTransport
@@ -16,7 +17,7 @@ from dt3_sdk.validation import LogEventValidator, ValidationError
 
 
 class LoggerImpl:
-    """Build, mask, validate, and export structured DT3 log events."""
+    """Build, mask, validate, batch, and export structured DT3 log events."""
 
     def __init__(self, config: Dict[str, Any]):
         """Initialize a logger from canonical or legacy-compatible SDK configuration.
@@ -27,8 +28,8 @@ class LoggerImpl:
 
         Args:
             config: SDK configuration including service metadata, masking settings,
-                validation mode, exporter selection, failure policy, and exporter
-                destination settings.
+                validation mode, exporter selection, failure policy, batching, and
+                exporter destination settings.
 
         Raises:
             ValueError: If configuration is invalid or an unsupported exporter is set.
@@ -57,6 +58,7 @@ class LoggerImpl:
         self._file_transport: Optional[FileTransport] = None
         self._http_transport: Optional[HttpTransport] = None
         self._otlp_transport: Optional[OtlpTransport] = None
+        self._batcher: Optional[EventBatcher] = None
         self._closed = False
 
         if self.exporter == "file":
@@ -86,6 +88,16 @@ class LoggerImpl:
         elif self.exporter != "stdout":
             raise ValueError(f"Unsupported exporter: {self.exporter}")
 
+        if self._require_boolean(
+            self.config.get("batching.enabled", False),
+            "batching.enabled",
+        ):
+            self._batcher = EventBatcher(
+                self._export_with_policy,
+                max_size=self.config.get("batching.max_size", 100),
+                flush_interval_ms=self.config.get("batching.flush_interval_ms", 5000),
+            )
+
     def _log(
         self,
         level: str,
@@ -93,7 +105,7 @@ class LoggerImpl:
         context: Optional[Dict[str, Any]] = None,
         error: Optional[Exception] = None,
     ) -> None:
-        """Create, mask, validate, and export one structured log event."""
+        """Create, mask, validate, then batch or export one structured log event."""
         self._ensure_open()
         # ContextVars provide request/task-local state. Explicit per-event
         # context intentionally wins over active scope values, preserving the
@@ -165,7 +177,10 @@ class LoggerImpl:
                     detail.to_dict() for detail in validation_result.errors
                 ]
 
-        self._deliver(lambda: self._export(masked_event))
+        if self._batcher is not None:
+            self._batcher.add(masked_event)
+        else:
+            self._export_with_policy(masked_event)
 
     def _export(self, event: Dict[str, Any]) -> None:
         """Deliver an already processed final event through the selected exporter."""
@@ -177,6 +192,10 @@ class LoggerImpl:
             self._http_transport.export(event)
         elif self._otlp_transport is not None:
             self._otlp_transport.export(event)
+
+    def _export_with_policy(self, event: Dict[str, Any]) -> None:
+        """Deliver one final event under the configured delivery failure policy."""
+        self._deliver(lambda: self._export(event))
 
     def _deliver(self, operation: Callable[[], None]) -> None:
         """Apply the configured delivery-only failure policy to one operation."""
@@ -285,8 +304,11 @@ class LoggerImpl:
 
     # PUBLIC_INTERFACE
     def flush(self) -> None:
-        """Flush the selected exporter using the configured delivery failure policy."""
+        """Synchronously flush buffered events and the selected exporter."""
         self._ensure_open()
+        if self._batcher is not None:
+            self._batcher.flush()
+
         if self._file_transport is not None:
             self._deliver(self._file_transport.flush)
         elif self._http_transport is not None:
@@ -296,10 +318,14 @@ class LoggerImpl:
 
     # PUBLIC_INTERFACE
     def close(self) -> None:
-        """Close the selected exporter using the configured delivery failure policy."""
+        """Flush remaining events, then close the selected exporter."""
         if self._closed:
             return
         self._closed = True
+
+        if self._batcher is not None:
+            self._deliver(self._batcher.close)
+
         if self._file_transport is not None:
             self._deliver(self._file_transport.close)
         elif self._http_transport is not None:
