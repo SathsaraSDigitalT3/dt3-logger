@@ -1,10 +1,10 @@
 import { Logger } from '../../api/Logger';
 import { Timer, TimerContext } from '../../api/Timer';
-import { Headers, LogContext, LogEvent, ValidationMode } from '../../api/types';
+import { Headers, LogContext, LogEvent, Severity, ValidationMode } from '../../api/types';
 import { EventBatcher } from '../batching';
 import { FileTransport } from '../FileTransport';
 import { HttpTransport } from '../HttpTransport';
-import { getActiveLogContext, withLogContext } from '../context';
+import { ensureCorrelationId, getActiveLogContext, withLogContext } from '../context';
 import { MaskingEngine } from '../masking';
 import { OtlpTransport } from '../OtlpTransport';
 import { TimerImpl } from '../Timer';
@@ -18,6 +18,7 @@ export class LoggerImpl implements Logger {
   private readonly exporter: string;
   private readonly failOpen: boolean;
   private readonly validationMode: ValidationMode;
+  private readonly autoGenerateCorrelationId: boolean;
   private readonly maskingEngine: MaskingEngine;
   private readonly validator: LogEventValidator;
   private readonly fileTransport?: FileTransport;
@@ -60,6 +61,10 @@ export class LoggerImpl implements Logger {
           )
         : undefined;
     this.validationMode = this.resolveValidationMode(config['validation.mode']);
+    this.autoGenerateCorrelationId = this.requireBoolean(
+      config['tracing.auto_generate_correlation_id'] ?? false,
+      'tracing.auto_generate_correlation_id',
+    );
     this.maskingEngine = new MaskingEngine({
       sensitiveFields: Array.isArray(config['masking.fields'])
         ? config['masking.fields'].filter((field): field is string => typeof field === 'string')
@@ -213,7 +218,10 @@ export class LoggerImpl implements Logger {
 
     // Explicit event context intentionally overrides values inherited from the
     // active execution scope. Logger-owned fields are asserted below.
-    const callerContext = { ...getActiveLogContext(), ...context };
+    const callerContext = {
+      ...ensureCorrelationId(getActiveLogContext(), this.autoGenerateCorrelationId),
+      ...context,
+    };
     const eventName =
       typeof callerContext['event.name'] === 'string' ? callerContext['event.name'] : 'GENERIC_EVENT';
     const logEvent: Record<string, unknown> = { ...callerContext };
@@ -324,6 +332,49 @@ export class LoggerImpl implements Logger {
    */
   public error(message: string, error?: Error, context?: Record<string, unknown>): void {
     this.log('ERROR', message, context, error);
+  }
+
+  // PUBLIC_INTERFACE
+  /**
+   * Export a FATAL log event through the canonical processing pipeline.
+   *
+   * @param message - Human-readable event message.
+   * @param context - Optional structured event context.
+   */
+  public fatal(message: string, context?: Record<string, unknown>): void {
+    this.log(Severity.FATAL, message, context);
+  }
+
+  // PUBLIC_INTERFACE
+  /**
+   * Process a supplied canonical event through the normal logger pipeline.
+   *
+   * The method preserves supplied schema-compatible fields while retaining
+   * logger ownership of event timestamps, service metadata, and severity.
+   *
+   * @param event - Canonical event object. It is copied and never mutated.
+   * @throws TypeError if the event is missing a string message.
+   * @throws Error if the event severity is unsupported.
+   */
+  public event(event: LogEvent): void {
+    if (event === null || typeof event !== 'object' || Array.isArray(event)) {
+      throw new TypeError('event must be an object');
+    }
+
+    const suppliedEvent = { ...event } as Record<string, unknown>;
+    const message = suppliedEvent.message;
+    if (typeof message !== 'string') {
+      throw new TypeError('event.message must be a string');
+    }
+
+    delete suppliedEvent.message;
+    const severity = typeof suppliedEvent.severity === 'string' ? suppliedEvent.severity.toUpperCase() : 'INFO';
+    delete suppliedEvent.severity;
+    if (!Object.values(Severity).includes(severity as Severity)) {
+      throw new Error('event.severity must be a supported severity');
+    }
+
+    this.log(severity, message, suppliedEvent);
   }
 
   // PUBLIC_INTERFACE

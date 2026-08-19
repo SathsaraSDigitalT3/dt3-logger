@@ -13,19 +13,23 @@
 export type Context = Record<string, unknown>;
 
 /**
- * Execution-scoped tracing and correlation metadata.
+ * Execution-scoped tracing, correlation, and tenant metadata.
  *
- * These convenience property names are mapped to the canonical event fields
- * `trace.id`, `span.id`, `parent.span.id`, and `correlation.id`.
+ * These convenience property names are mapped to canonical event fields.
  */
 export interface LogContext {
   traceId?: string;
   spanId?: string;
   parentSpanId?: string;
   correlationId?: string;
+  tenantId?: string;
+  tenantRegion?: string;
+  tenantEnvironment?: string;
+  'trace.flags'?: string;
+  tracestate?: string;
 }
 
-/** Structured attributes attached to a log event. */
+/** Structured attributes attached to log events. */
 export type Attributes = Record<string, unknown>;
 
 /** HTTP-style string-to-string header map. */
@@ -165,7 +169,7 @@ export interface ValidationResult {
  * SDK configuration object.
  *
  * Only `service.name`, `service.version`, and `deployment.environment`
- * are required.  All other fields have sensible defaults applied by
+ * are required. All other fields have sensible defaults applied by
  * `resolveConfig()`.
  */
 export interface SdkConfig {
@@ -178,22 +182,22 @@ export interface SdkConfig {
   /** Deployment environment, e.g. production / staging / development (required). */
   'deployment.environment': string;
 
-  /** Schema version string.  Defaults to `'1.0.0'`. */
+  /** Schema version string. Defaults to `'1.0.0'`. */
   'schema.version'?: string;
 
-  /** SDK identifier.  Defaults to `'@digitalt3/commons'`. */
+  /** SDK identifier. Defaults to `'@digitalt3/commons'`. */
   'sdk.name'?: string;
 
-  /** SDK version.  Defaults to `'0.1.0'`. */
+  /** SDK version. Defaults to `'0.1.0'`. */
   'sdk.version'?: string;
 
-  /** Validation mode.  Defaults to `ValidationMode.LENIENT`. */
+  /** Validation mode. Defaults to `ValidationMode.LENIENT`. */
   'validation.mode'?: ValidationMode | string;
 
-  /** When true, exporter/transport failures are swallowed.  Defaults to `true`. */
+  /** When true, exporter/transport failures are swallowed. Defaults to `true`. */
   fail_open?: boolean;
 
-  /** Exporter backend: `'stdout'`, `'file'`, `'http'`, `'otlp'`.  Defaults to `'stdout'`. */
+  /** Exporter backend: `'stdout'`, `'file'`, `'http'`, `'otlp'`. Defaults to `'stdout'`. */
   exporter?: string;
 
   /** File path when exporter is `'file'`. */
@@ -220,18 +224,21 @@ export interface SdkConfig {
   /** Optional request headers for the OTLP/HTTP exporter. */
   'otlp.headers'?: Headers;
 
-  /** Whether field masking is enabled.  Defaults to `true`. */
+  /** Whether field masking is enabled. Defaults to `true`. */
   'masking.enabled'?: boolean;
 
   /** Additional field names to mask (merged with defaults). */
   'masking.fields'?: string[];
 
-  /** Whether event batching is enabled.  Defaults to `false`. */
+  /** Whether event batching is enabled. Defaults to `false`. */
   'batching.enabled'?: boolean;
 
-  /** Maximum batch size before an automatic flush.  Defaults to `100`. */
+  /** Maximum batch size before an automatic flush. Defaults to `100`. */
   'batching.max_size'?: number;
 
-  /** Batch flush interval in milliseconds.  Defaults to `5000`. */
+  /** Batch flush interval in milliseconds. Defaults to `5000`. */
   'batching.flush_interval_ms'?: number;
+
+  /** Generate a UUID correlation ID when a scoped value is absent. Defaults to `false`. */
+  'tracing.auto_generate_correlation_id'?: boolean;
 }

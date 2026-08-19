@@ -1,6 +1,6 @@
 import { Logger } from '../../api/Logger';
 import { Timer, TimerContext } from '../../api/Timer';
-import { LogContext } from '../../api/types';
+import { LogContext, LogEvent } from '../../api/types';
 /**
  * Concrete DT3 logger that builds, validates, batches, and exports structured events.
  */
@@ -9,6 +9,7 @@ export declare class LoggerImpl implements Logger {
     private readonly exporter;
     private readonly failOpen;
     private readonly validationMode;
+    private readonly autoGenerateCorrelationId;
     private readonly maskingEngine;
     private readonly validator;
     private readonly fileTransport?;
@@ -71,6 +72,8 @@ export declare class LoggerImpl implements Logger {
      * @param context - Optional structured event context.
      */
     error(message: string, error?: Error, context?: Record<string, unknown>): void;
+    fatal(message: string, context?: Record<string, unknown>): void;
+    event(event: LogEvent): void;
     /**
      * Create an unstarted timer that emits a canonical INFO completion event.
      *

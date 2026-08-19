@@ -18,6 +18,7 @@ class LoggerImpl {
     exporter;
     failOpen;
     validationMode;
+    autoGenerateCorrelationId;
     maskingEngine;
     validator;
     fileTransport;
@@ -49,6 +50,7 @@ class LoggerImpl {
                 ? new OtlpTransport_1.OtlpTransport(typeof config['otlp.endpoint'] === 'string' ? config['otlp.endpoint'] : '', typeof config['otlp.timeout'] === 'number' ? config['otlp.timeout'] : 10000, this.resolveHeaders(config['otlp.headers'], 'otlp.headers'))
                 : undefined;
         this.validationMode = this.resolveValidationMode(config['validation.mode']);
+        this.autoGenerateCorrelationId = this.requireBoolean(config['tracing.auto_generate_correlation_id'] ?? false, 'tracing.auto_generate_correlation_id');
         this.maskingEngine = new masking_1.MaskingEngine({
             sensitiveFields: Array.isArray(config['masking.fields'])
                 ? config['masking.fields'].filter((field) => typeof field === 'string')
@@ -166,7 +168,7 @@ class LoggerImpl {
         this.ensureOpen();
         // Explicit event context intentionally overrides values inherited from the
         // active execution scope. Logger-owned fields are asserted below.
-        const callerContext = { ...(0, context_1.getActiveLogContext)(), ...context };
+        const callerContext = { ...(0, context_1.ensureCorrelationId)((0, context_1.getActiveLogContext)(), this.autoGenerateCorrelationId), ...context };
         const eventName = typeof callerContext['event.name'] === 'string' ? callerContext['event.name'] : 'GENERIC_EVENT';
         const logEvent = { ...callerContext };
         // The logger owns these fields; setting them after context prevents caller
@@ -263,6 +265,26 @@ class LoggerImpl {
      */
     error(message, error, context) {
         this.log('ERROR', message, context, error);
+    }
+    fatal(message, context) {
+        this.log(types_1.Severity.FATAL, message, context);
+    }
+    event(event) {
+        if (event === null || typeof event !== 'object' || Array.isArray(event)) {
+            throw new TypeError('event must be an object');
+        }
+        const suppliedEvent = { ...event };
+        const message = suppliedEvent.message;
+        if (typeof message !== 'string') {
+            throw new TypeError('event.message must be a string');
+        }
+        delete suppliedEvent.message;
+        const severity = typeof suppliedEvent.severity === 'string' ? suppliedEvent.severity.toUpperCase() : 'INFO';
+        delete suppliedEvent.severity;
+        if (!Object.values(types_1.Severity).includes(severity)) {
+            throw new Error('event.severity must be a supported severity');
+        }
+        this.log(severity, message, suppliedEvent);
     }
     // PUBLIC_INTERFACE
     /**

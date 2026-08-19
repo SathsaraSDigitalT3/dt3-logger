@@ -63,6 +63,9 @@ await logger.withContext(
 | `spanId` | `span.id` |
 | `parentSpanId` | `parent.span.id` |
 | `correlationId` | `correlation.id` |
+| `tenantId` | `tenant.id` |
+| `tenantRegion` | `tenant.region` |
+| `tenantEnvironment` | `tenant.environment` |
 
 The canonical fields are attached before masking, validation, and transport
 delivery, so they work consistently with stdout, file, HTTP, and OTLP exporters.
@@ -76,7 +79,80 @@ delivery, so they work consistently with stdout, file, HTTP, and OTLP exporters.
   when the nested callback completes.
 - No scoped context is added outside `withContext`, preserving existing logger
   behavior.
-- Explicit values passed directly to `debug`, `info`, `warn`, or `error` take
+- Explicit values passed directly to `debug`, `info`, `warn`, `error`, `fatal`, or `event` take
   precedence over the active scoped context.
 - Logger-owned fields such as severity, service metadata, timestamps, and error
   fields retain their existing precedence over both scoped and event-level input.
+
+## Fatal and canonical events
+
+Use `fatal()` for an unrecoverable event; it passes through the same masking,
+validation, batching, and exporter pipeline as the other logging methods.
+
+```ts
+logger.fatal('Database is unavailable', { 'event.name': 'DATABASE_UNAVAILABLE' });
+```
+
+Use `event()` when a canonical structured event has already been assembled.
+The input object is not mutated and remains subject to normal enrichment,
+masking, validation, batching, and exporter processing.
+
+```ts
+logger.event({
+  timestamp: new Date().toISOString(),
+  severity: 'WARN',
+  message: 'Order delayed',
+  'event.name': 'ORDER_DELAYED',
+  'schema.version': '1.0.0',
+  'sdk.name': '@digitalt3/commons',
+  'sdk.version': '0.1.0',
+  'service.name': 'orders-api',
+  'service.version': '1.0.0',
+  'deployment.environment': 'production',
+  'tenant.id': 'tenant-42',
+});
+```
+
+## HTTP propagation and tenants
+
+`inject()` and `extract()` support W3C `traceparent`, optional `tracestate`,
+`x-correlation-id`, and tenant headers. Header names are extracted
+case-insensitively; malformed `traceparent` values are ignored safely without
+discarding valid correlation or tenant headers.
+
+```ts
+import { createLogger, extract, inject } from '@digitalt3/commons';
+
+const incomingContext = extract(request.headers as Record<string, string>);
+await logger.withContext(incomingContext, async () => {
+  logger.info('Handling request', { 'event.name': 'REQUEST_HANDLING' });
+
+  const outgoingHeaders: Record<string, string> = {};
+  inject(incomingContext, outgoingHeaders);
+  // Use outgoingHeaders for a downstream HTTP request.
+});
+```
+
+Tenant values map as follows:
+
+| HTTP header | Canonical event field |
+| --- | --- |
+| `x-tenant-id` | `tenant.id` |
+| `x-tenant-region` | `tenant.region` |
+| `x-tenant-environment` | `tenant.environment` |
+
+## Correlation-ID generation
+
+Set `tracing.auto_generate_correlation_id` to `true` to generate a UUID for
+the active execution scope only when no explicit or extracted correlation ID is
+present. The generated ID is reused by subsequent events within that scope and
+is available to `inject()` when the active context is supplied.
+
+```ts
+const logger = createLogger({
+  'service.name': 'orders-api',
+  'service.version': '1.0.0',
+  'deployment.environment': 'production',
+  'tracing.auto_generate_correlation_id': true,
+});
+```

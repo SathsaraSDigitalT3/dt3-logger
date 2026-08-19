@@ -1,11 +1,31 @@
 import { Timer, TimerContext } from './Timer';
-import { LogContext } from './types';
+import { LogContext, LogEvent } from './types';
 
 export interface Logger {
   debug(message: string, context?: Record<string, unknown>): void;
   info(message: string, context?: Record<string, unknown>): void;
   warn(message: string, context?: Record<string, unknown>): void;
   error(message: string, error?: Error, context?: Record<string, unknown>): void;
+
+  // PUBLIC_INTERFACE
+  /**
+   * Export a FATAL log event through the normal processing pipeline.
+   *
+   * @param message - Human-readable event message.
+   * @param context - Optional structured event context.
+   */
+  fatal(message: string, context?: Record<string, unknown>): void;
+
+  // PUBLIC_INTERFACE
+  /**
+   * Process a canonical log event through enrichment, masking, validation,
+   * batching, and the configured exporter.
+   *
+   * @param event - Canonical event fields. The object is never mutated.
+   * @throws TypeError when the event or its message is invalid.
+   * @throws Error when the severity is unsupported or the logger is closed.
+   */
+  event(event: LogEvent): void;
 
   // PUBLIC_INTERFACE
   /**
@@ -25,7 +45,7 @@ export interface Logger {
    * Context propagates through promises and async/await. Nested calls inherit
    * unspecified values and restore the preceding scope after completion.
    *
-   * @param context - Trace and correlation identifiers for the execution scope.
+   * @param context - Trace, correlation, and tenant identifiers for the execution scope.
    * @param callback - Work to execute while the supplied context is active.
    * @returns The callback result.
    */
