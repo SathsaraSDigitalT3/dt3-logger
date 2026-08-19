@@ -5,10 +5,10 @@ from __future__ import annotations
 import json
 import traceback
 from datetime import datetime, timezone
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict, Mapping, Optional
 
 from dt3_sdk.batching import EventBatcher
-from dt3_sdk.context import get_active_logger_context
+from dt3_sdk.context import ensure_correlation_id, get_active_logger_context
 from dt3_sdk.file_transport import FileTransport
 from dt3_sdk.http_transport import HttpTransport
 from dt3_sdk.masking import MaskingEngine
@@ -60,6 +60,10 @@ class LoggerImpl:
         self._otlp_transport: Optional[OtlpTransport] = None
         self._batcher: Optional[EventBatcher] = None
         self._closed = False
+        self._auto_generate_correlation_id = self._require_boolean(
+            self.config.get("tracing.auto_generate_correlation_id", False),
+            "tracing.auto_generate_correlation_id",
+        )
 
         if self.exporter == "file":
             self._file_transport = FileTransport(
@@ -110,7 +114,10 @@ class LoggerImpl:
         # ContextVars provide request/task-local state. Explicit per-event
         # context intentionally wins over active scope values, preserving the
         # logger's established caller-context precedence behavior.
-        caller_context = get_active_logger_context()
+        caller_context = ensure_correlation_id(
+            get_active_logger_context(),
+            auto_generate=self._auto_generate_correlation_id,
+        )
         caller_context.update(context or {})
         event_name = caller_context.get("event.name")
         if not isinstance(event_name, str):
@@ -293,6 +300,11 @@ class LoggerImpl:
         self._log("WARN", message, context)
 
     # PUBLIC_INTERFACE
+    def fatal(self, message: str, context: Optional[Dict[str, Any]] = None) -> None:
+        """Export a FATAL log event through the canonical processing pipeline."""
+        self._log("FATAL", message, context)
+
+    # PUBLIC_INTERFACE
     def error(
         self,
         message: str,
@@ -301,6 +313,36 @@ class LoggerImpl:
     ) -> None:
         """Export an ERROR log event with optional structured error details."""
         self._log("ERROR", message, context, error)
+
+    # PUBLIC_INTERFACE
+    def event(self, event_object: Mapping[str, Any]) -> None:
+        """Process a canonical log event through masking, validation, and export.
+
+        Method-owned fields remain authoritative for event construction. The
+        supplied severity determines the logging method pipeline used, while
+        all other event fields are preserved as caller context.
+
+        Args:
+            event_object: Canonical event fields, including a string message and
+                optional severity. The mapping is never mutated.
+
+        Raises:
+            TypeError: If the supplied event is not a mapping or message is not a string.
+            ValueError: If its severity is unsupported.
+            RuntimeError: If the logger is closed.
+        """
+        if not isinstance(event_object, Mapping):
+            raise TypeError("event_object must be a mapping")
+
+        supplied_event = dict(event_object)
+        message = supplied_event.pop("message", "")
+        if not isinstance(message, str):
+            raise TypeError("event_object.message must be a string")
+
+        severity = str(supplied_event.pop("severity", "INFO")).upper()
+        if severity not in {"DEBUG", "INFO", "WARN", "ERROR", "FATAL"}:
+            raise ValueError("event_object.severity must be a supported severity")
+        self._log(severity, message, supplied_event)
 
     # PUBLIC_INTERFACE
     def flush(self) -> None:
@@ -332,3 +374,28 @@ class LoggerImpl:
             self._deliver(self._http_transport.close)
         elif self._otlp_transport is not None:
             self._deliver(self._otlp_transport.close)
+
+    # PUBLIC_INTERFACE
+    def create_timer(
+        self,
+        name: str,
+        context: Optional[Dict[str, Any]] = None,
+    ) -> "TimerImpl":
+        """Create an unstarted Timer that emits a canonical completion event.
+
+        Args:
+            name: Non-empty canonical event name for the completion event.
+            context: Optional metadata merged with active logger context at finish.
+
+        Returns:
+            A new unstarted TimerImpl instance.
+
+        Raises:
+            RuntimeError: If the logger is closed.
+            TypeError: If the name or context has an unsupported type.
+            ValueError: If the name is blank.
+        """
+        from dt3_sdk.timer import TimerImpl
+
+        self._ensure_open()
+        return TimerImpl(self, name, context)

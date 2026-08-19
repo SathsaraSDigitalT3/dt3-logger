@@ -1,4 +1,5 @@
 import { Logger } from '../../api/Logger';
+import { Timer, TimerContext } from '../../api/Timer';
 import { Headers, LogContext, LogEvent, ValidationMode } from '../../api/types';
 import { EventBatcher } from '../batching';
 import { FileTransport } from '../FileTransport';
@@ -6,6 +7,7 @@ import { HttpTransport } from '../HttpTransport';
 import { getActiveLogContext, withLogContext } from '../context';
 import { MaskingEngine } from '../masking';
 import { OtlpTransport } from '../OtlpTransport';
+import { TimerImpl } from '../Timer';
 import { LogEventValidator, ValidationError } from '../validation';
 
 /**
@@ -156,6 +158,16 @@ export class LoggerImpl implements Logger {
     if (this.closed) {
       throw new Error('Logger is closed');
     }
+  }
+
+  /**
+   * Verify that the logger remains usable by a timer lifecycle operation.
+   *
+   * This intentionally delegates to the existing logger lifecycle gate so
+   * timers fail with the same documented closed-logger error as log methods.
+   */
+  public ensureTimerLoggerOpen(): void {
+    this.ensureOpen();
   }
 
   private requireBoolean(value: unknown, key: string): boolean {
@@ -312,6 +324,23 @@ export class LoggerImpl implements Logger {
    */
   public error(message: string, error?: Error, context?: Record<string, unknown>): void {
     this.log('ERROR', message, context, error);
+  }
+
+  // PUBLIC_INTERFACE
+  /**
+   * Create an unstarted timer that emits a canonical INFO completion event.
+   *
+   * Completion delegates to {@link info}, preserving active context, masking,
+   * validation, batching, and the configured transport/exporter behavior.
+   *
+   * @param name - Non-blank canonical event name for the completion event.
+   * @param context - Optional event metadata for the completion event.
+   * @returns A new unstarted timer.
+   * @throws Error when the logger is closed or the timer name is invalid.
+   */
+  public createTimer(name: string, context?: TimerContext): Timer {
+    this.ensureOpen();
+    return new TimerImpl(this, name, context);
   }
 
   // PUBLIC_INTERFACE

@@ -3,6 +3,7 @@ package com.digitalt3.commons.sdk;
 import com.digitalt3.commons.api.Logger;
 import com.digitalt3.commons.api.LogContext;
 import com.digitalt3.commons.api.SdkConfig;
+import com.digitalt3.commons.api.Timer;
 import com.digitalt3.commons.api.ValidationMode;
 import com.digitalt3.commons.api.Validator;
 
@@ -27,6 +28,7 @@ import java.util.Objects;
 public final class StdoutLogger implements Logger {
 
     private static final String GENERIC_EVENT = "GENERIC_EVENT";
+    private static final String CANONICAL_EVENT_NAME_PATTERN = "^[A-Z][A-Z0-9_]*$";
 
     private final SdkConfig config;
     private final RecursiveMaskingEngine maskingEngine;
@@ -112,6 +114,22 @@ public final class StdoutLogger implements Logger {
     @Override
     public void error(String message, Throwable error, Map<String, Object> context) {
         log("ERROR", message, context, error);
+    }
+
+    // PUBLIC_INTERFACE
+    /**
+     * Create an unstarted single-use timer associated with this logger.
+     *
+     * @param name canonical UPPER_SNAKE_CASE completion event name
+     * @return a new timer which emits through this logger on completion
+     * @throws IllegalArgumentException if the supplied event name is invalid
+     * @throws IllegalStateException if the logger is closed
+     */
+    @Override
+    public synchronized Timer createTimer(String name) {
+        ensureOpen();
+        validateTimerName(name);
+        return new LoggerTimer(name);
     }
 
     // PUBLIC_INTERFACE
@@ -275,6 +293,100 @@ public final class StdoutLogger implements Logger {
             }
         } catch (HttpTransportError | OtlpTransportError | IllegalStateException exception) {
             handleTransportFailure(exception);
+        }
+    }
+
+    private void validateTimerName(String name) {
+        if (name == null || name.trim().isEmpty() || !name.matches(CANONICAL_EVENT_NAME_PATTERN)) {
+            throw new IllegalArgumentException(
+                "timer name must be a canonical UPPER_SNAKE_CASE event name"
+            );
+        }
+    }
+
+    /**
+     * Monotonic single-use timer that delegates completion to the owning logger.
+     */
+    private final class LoggerTimer implements Timer {
+        private final String name;
+        private boolean started;
+        private boolean completed;
+        private long startedAtNanos;
+        private long measuredDurationMs;
+
+        private LoggerTimer(String name) {
+            this.name = name;
+        }
+
+        // PUBLIC_INTERFACE
+        /**
+         * Start this timer using the JVM monotonic clock.
+         *
+         * @return this timer
+         */
+        @Override
+        public synchronized Timer start() {
+            ensureOpen();
+            if (started) {
+                throw new IllegalStateException("Timer has already started");
+            }
+
+            started = true;
+            startedAtNanos = System.nanoTime();
+            return this;
+        }
+
+        // PUBLIC_INTERFACE
+        /**
+         * Stop once and emit the timer completion event through the logger pipeline.
+         *
+         * @return the measured non-negative duration in milliseconds
+         */
+        @Override
+        public synchronized long stop() {
+            ensureOpen();
+            if (!started) {
+                throw new IllegalStateException("Timer has not started");
+            }
+            if (completed) {
+                throw new IllegalStateException("Timer has already completed");
+            }
+
+            long elapsedNanos = System.nanoTime() - startedAtNanos;
+            measuredDurationMs = Math.max(0L, elapsedNanos / 1_000_000L);
+            completed = true;
+            log(
+                "INFO",
+                name,
+                Map.of("event.name", name, "duration.ms", measuredDurationMs),
+                null
+            );
+            return measuredDurationMs;
+        }
+
+        // PUBLIC_INTERFACE
+        /**
+         * Complete this timer as an alias for {@link #stop()}.
+         *
+         * @return the measured non-negative duration in milliseconds
+         */
+        @Override
+        public long finish() {
+            return stop();
+        }
+
+        // PUBLIC_INTERFACE
+        /**
+         * Return the completed timer's measured duration.
+         *
+         * @return measured non-negative duration in milliseconds
+         */
+        @Override
+        public synchronized long durationMs() {
+            if (!completed) {
+                throw new IllegalStateException("Timer has not completed");
+            }
+            return measuredDurationMs;
         }
     }
 

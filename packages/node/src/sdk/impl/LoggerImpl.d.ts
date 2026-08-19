@@ -1,4 +1,5 @@
 import { Logger } from '../../api/Logger';
+import { Timer, TimerContext } from '../../api/Timer';
 import { LogContext } from '../../api/types';
 /**
  * Concrete DT3 logger that builds, validates, batches, and exports structured events.
@@ -26,6 +27,7 @@ export declare class LoggerImpl implements Logger {
     private resolveHttpTimeout;
     private resolveHeaders;
     private ensureOpen;
+    ensureTimerLoggerOpen(): void;
     private requireBoolean;
     private handleDeliveryFailure;
     private export;
@@ -69,6 +71,15 @@ export declare class LoggerImpl implements Logger {
      * @param context - Optional structured event context.
      */
     error(message: string, error?: Error, context?: Record<string, unknown>): void;
+    /**
+     * Create an unstarted timer that emits a canonical INFO completion event.
+     *
+     * @param name - Non-blank canonical event name for the completion event.
+     * @param context - Optional event metadata for the completion event.
+     * @returns A new unstarted timer.
+     * @throws Error when the logger is closed or the timer name is invalid.
+     */
+    createTimer(name: string, context?: TimerContext): Timer;
     /**
      * Flush buffered events and settle delivery work initiated before the flush boundary.
      *

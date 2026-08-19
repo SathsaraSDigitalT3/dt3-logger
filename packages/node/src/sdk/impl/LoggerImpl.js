@@ -8,6 +8,7 @@ const HttpTransport_1 = require("../HttpTransport");
 const context_1 = require("../context");
 const masking_1 = require("../masking");
 const OtlpTransport_1 = require("../OtlpTransport");
+const Timer_1 = require("../Timer");
 const validation_1 = require("../validation");
 /**
  * Concrete DT3 logger that builds, validates, batches, and exports structured events.
@@ -118,6 +119,15 @@ class LoggerImpl {
         if (this.closed) {
             throw new Error('Logger is closed');
         }
+    }
+    /**
+     * Verify that the logger remains usable by a timer lifecycle operation.
+     *
+     * This intentionally delegates to the existing logger lifecycle gate so
+     * timers fail with the same documented closed-logger error as log methods.
+     */
+    ensureTimerLoggerOpen() {
+        this.ensureOpen();
     }
     requireBoolean(value, key) {
         if (typeof value !== 'boolean') {
@@ -253,6 +263,22 @@ class LoggerImpl {
      */
     error(message, error, context) {
         this.log('ERROR', message, context, error);
+    }
+    // PUBLIC_INTERFACE
+    /**
+     * Create an unstarted timer that emits a canonical INFO completion event.
+     *
+     * Completion delegates to info, preserving active context, masking,
+     * validation, batching, and the configured transport/exporter behavior.
+     *
+     * @param name - Non-blank canonical event name for the completion event.
+     * @param context - Optional event metadata for the completion event.
+     * @returns A new unstarted timer.
+     * @throws Error when the logger is closed or the timer name is invalid.
+     */
+    createTimer(name, context) {
+        this.ensureOpen();
+        return new Timer_1.TimerImpl(this, name, context);
     }
     // PUBLIC_INTERFACE
     /**

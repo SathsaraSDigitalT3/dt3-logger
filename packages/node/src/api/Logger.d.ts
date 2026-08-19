@@ -5,6 +5,15 @@ export interface Logger {
     warn(message: string, context?: Record<string, unknown>): void;
     error(message: string, error?: Error, context?: Record<string, unknown>): void;
     /**
+     * Create an unstarted timer that emits an INFO completion event through this logger.
+     *
+     * @param name - Non-blank canonical event name for the completion event.
+     * @param context - Optional event metadata merged with active scoped context on completion.
+     * @returns A new unstarted timer.
+     * @throws Error when this logger is closed or the name is invalid.
+     */
+    createTimer(name: string, context?: import('./Timer').TimerContext): import('./Timer').Timer;
+    /**
      * Run a synchronous or asynchronous callback with execution-scoped log context.
      *
      * Context propagates through promises and async/await. Nested calls inherit

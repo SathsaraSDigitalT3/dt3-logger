@@ -15,6 +15,7 @@ var __exportStar = (this && this.__exportStar) || function(m, exports) {
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 __exportStar(require("./api/Logger"), exports);
+__exportStar(require("./api/Timer"), exports);
 __exportStar(require("./api/types"), exports);
 __exportStar(require("./sdk/batching"), exports);
 __exportStar(require("./sdk/context"), exports);
@@ -22,4 +23,5 @@ __exportStar(require("./sdk/factory"), exports);
 __exportStar(require("./sdk/HttpTransport"), exports);
 __exportStar(require("./sdk/masking"), exports);
 __exportStar(require("./sdk/OtlpTransport"), exports);
+__exportStar(require("./sdk/Timer"), exports);
 __exportStar(require("./sdk/validation"), exports);

@@ -13,6 +13,20 @@ public interface Logger extends AutoCloseable {
 
     // PUBLIC_INTERFACE
     /**
+     * Create a single-use timer for a canonical named event.
+     *
+     * <p>The timer must be started explicitly with {@link Timer#start()} and
+     * emits an INFO event through this logger when stopped.</p>
+     *
+     * @param name canonical UPPER_SNAKE_CASE event name
+     * @return a new, unstarted timer associated with this logger
+     * @throws IllegalArgumentException if {@code name} is blank or is not a canonical event name
+     * @throws IllegalStateException if this logger is closed
+     */
+    Timer createTimer(String name);
+
+    // PUBLIC_INTERFACE
+    /**
      * Activate trace and correlation metadata for logs created on the current thread.
      *
      * <p>Use the returned scope with try-with-resources. Nested scopes inherit

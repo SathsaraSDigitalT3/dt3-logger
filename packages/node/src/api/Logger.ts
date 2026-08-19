@@ -1,3 +1,4 @@
+import { Timer, TimerContext } from './Timer';
 import { LogContext } from './types';
 
 export interface Logger {
@@ -5,6 +6,17 @@ export interface Logger {
   info(message: string, context?: Record<string, unknown>): void;
   warn(message: string, context?: Record<string, unknown>): void;
   error(message: string, error?: Error, context?: Record<string, unknown>): void;
+
+  // PUBLIC_INTERFACE
+  /**
+   * Create an unstarted timer that emits an INFO completion event through this logger.
+   *
+   * @param name - Non-blank canonical event name for the completion event.
+   * @param context - Optional event metadata merged with active scoped context on completion.
+   * @returns A new unstarted timer.
+   * @throws Error when this logger is closed or the name is invalid.
+   */
+  createTimer(name: string, context?: TimerContext): Timer;
 
   // PUBLIC_INTERFACE
   /**

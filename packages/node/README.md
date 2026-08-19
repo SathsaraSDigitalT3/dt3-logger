@@ -2,6 +2,25 @@
 
 Full implementation of the DT3 Commons logging, tracing, and multi-tenancy SDK for Node.js 18+ and TypeScript.
 
+## Timer API
+
+Create an unstarted timer with `logger.createTimer`, then call `start()` and
+`stop()` (or `finish()`) to emit one canonical `INFO` completion event through
+the normal logger pipeline. The completion event includes the supplied
+`event.name`, a non-negative `duration.ms`, active execution-scoped context,
+and any optional timer metadata.
+
+```ts
+const timer = logger.createTimer('ORDER_PROCESSING', { 'order.id': 'order-42' });
+timer.start();
+const elapsedMs = timer.stop();
+```
+
+Timers use Node.js high-resolution monotonic time. A timer is single-use:
+starting it twice, stopping it before it starts, or stopping it more than once
+throws an error. Creating, starting, or completing a timer after logger closure
+also fails with the logger’s standard `Logger is closed` lifecycle error.
+
 ## Execution-scoped context propagation
 
 The SDK supports execution-scoped trace and correlation context through Node.js

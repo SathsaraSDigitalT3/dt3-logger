@@ -1,25 +1,52 @@
 package com.digitalt3.commons.api;
 
-import java.util.Map;
-
 /**
- * Timer for measuring operation duration.
- * <p>
- * Created via {@link Logger#startTimer(String, Map)}.
- * When {@link #end(boolean, Map)} is called, the timer records
- * duration.ms in the resulting log event.
- * </p>
+ * Single-use monotonic timer associated with a {@link Logger}.
+ *
+ * <p>Start a timer with {@link #start()}, then complete it once using
+ * {@link #stop()} or {@link #finish()}. Completion emits an INFO canonical
+ * event with the configured event name and a non-negative {@code duration.ms}
+ * through the owning logger's normal event pipeline.</p>
  *
  * @since 0.1.0
  */
 public interface Timer {
 
+    // PUBLIC_INTERFACE
     /**
-     * End the timer and emit a log event with duration.
+     * Start this timer.
      *
-     * @param success Whether the timed operation succeeded
-     * @param context Additional context to include
-     * @return The emitted log event as a map
+     * @return this timer
+     * @throws IllegalStateException if the timer has already started or the logger is closed
      */
-    Map<String, Object> end(boolean success, Map<String, Object> context);
+    Timer start();
+
+    // PUBLIC_INTERFACE
+    /**
+     * Stop this timer, record its duration, and emit its completion event.
+     *
+     * @return the measured non-negative duration in milliseconds
+     * @throws IllegalStateException if the timer has not started, has already completed,
+     *     or the logger is closed
+     */
+    long stop();
+
+    // PUBLIC_INTERFACE
+    /**
+     * Complete this timer as an alias for {@link #stop()}.
+     *
+     * @return the measured non-negative duration in milliseconds
+     * @throws IllegalStateException if the timer has not started, has already completed,
+     *     or the logger is closed
+     */
+    long finish();
+
+    // PUBLIC_INTERFACE
+    /**
+     * Return the measured duration after this timer has completed.
+     *
+     * @return the measured non-negative duration in milliseconds
+     * @throws IllegalStateException if this timer has not completed
+     */
+    long durationMs();
 }

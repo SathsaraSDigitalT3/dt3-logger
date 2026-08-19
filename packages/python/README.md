@@ -37,6 +37,29 @@ The convenience names map to canonical event fields:
 Other schema-compatible metadata can be supplied directly. Values passed in an
 individual log call's `context` mapping override active scoped context values.
 
+## Timers
+
+Create a timer from an existing logger, call `start()`, then call `stop()` (or
+the equivalent `finish()`) to emit exactly one canonical `INFO` event. The
+timer name becomes `event.name`, the elapsed monotonic duration is recorded in
+`duration.ms`, and the elapsed duration in milliseconds is also returned.
+
+```python
+from dt3_sdk import create_logger
+
+logger = create_logger({"service.name": "orders-api", "service.version": "1.0.0"})
+timer = logger.create_timer("ORDER_PROCESSING", {"order.id": "order-42"}).start()
+
+# Process the order.
+elapsed_ms = timer.stop()
+```
+
+Timers inherit the logger's active `logger_context`, validation, masking,
+exporter, batching, and lifecycle behavior. A timer is single-use: starting it
+twice, stopping it before it starts, or stopping it more than once raises
+`RuntimeError`. Creating or stopping a timer after the logger closes also
+raises the established `RuntimeError("Logger is closed")`.
+
 ## Batching
 
 Batching reduces the overhead of frequent logging by holding final events until

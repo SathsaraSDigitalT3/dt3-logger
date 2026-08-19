@@ -1,4 +1,5 @@
 export * from './api/Logger';
+export * from './api/Timer';
 export * from './api/types';
 export * from './sdk/batching';
 export * from './sdk/context';
@@ -6,4 +7,5 @@ export * from './sdk/factory';
 export * from './sdk/HttpTransport';
 export * from './sdk/masking';
 export * from './sdk/OtlpTransport';
+export * from './sdk/Timer';
 export * from './sdk/validation';
