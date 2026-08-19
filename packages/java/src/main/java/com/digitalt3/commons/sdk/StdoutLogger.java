@@ -34,6 +34,7 @@ public final class StdoutLogger implements Logger {
     private final FileTransport fileTransport;
     private final HttpTransport httpTransport;
     private final OtlpTransport otlpTransport;
+    private final EventBatcher batcher;
     private boolean closed;
 
     /**
@@ -55,6 +56,13 @@ public final class StdoutLogger implements Logger {
         this.fileTransport = createFileTransport(config);
         this.httpTransport = createHttpTransport(config);
         this.otlpTransport = createOtlpTransport(config);
+        this.batcher = config.isBatchingEnabled()
+            ? new EventBatcher(
+                this::writeFinalEvent,
+                config.getBatchingMaxSize(),
+                config.getBatchingFlushIntervalMs()
+            )
+            : null;
     }
 
     // PUBLIC_INTERFACE
@@ -113,6 +121,9 @@ public final class StdoutLogger implements Logger {
     @Override
     public void flush() {
         ensureOpen();
+        if (batcher != null) {
+            batcher.flush();
+        }
         if (fileTransport != null) {
             try {
                 fileTransport.flush();
@@ -153,6 +164,13 @@ public final class StdoutLogger implements Logger {
     public synchronized void close() {
         if (closed) {
             return;
+        }
+        if (batcher != null) {
+            try {
+                batcher.close();
+            } catch (HttpTransportError | OtlpTransportError | IllegalStateException exception) {
+                handleTransportFailure(exception);
+            }
         }
         closed = true;
 
@@ -250,7 +268,11 @@ public final class StdoutLogger implements Logger {
         }
 
         try {
-            writeFinalEvent(maskedEvent);
+            if (batcher != null) {
+                batcher.add(maskedEvent);
+            } else {
+                writeFinalEvent(maskedEvent);
+            }
         } catch (HttpTransportError | OtlpTransportError | IllegalStateException exception) {
             handleTransportFailure(exception);
         }

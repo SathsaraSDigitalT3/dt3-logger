@@ -31,6 +31,9 @@ public class SdkConfig {
     private List<String> maskingFields = new ArrayList<>();
     private String maskingReplacementValue = "[REDACTED]";
     private boolean maskingTrackMaskedFields;
+    private boolean batchingEnabled;
+    private int batchingMaxSize = 100;
+    private long batchingFlushIntervalMs = 5000;
 
     // PUBLIC_INTERFACE
     /**
@@ -99,6 +102,13 @@ public class SdkConfig {
         setHeadersIfPresent(values, "otlp.headers", this::setOtlpHeaders);
         setBooleanIfPresent(values, "masking.enabled", this::setMaskingEnabled);
         setStringListIfPresent(values, "masking.fields", this::setMaskingFields);
+        setBooleanIfPresent(values, "batching.enabled", this::setBatchingEnabled);
+        setPositiveIntIfPresent(values, "batching.max_size", this::setBatchingMaxSize);
+        setPositiveLongIfPresent(
+            values,
+            "batching.flush_interval_ms",
+            this::setBatchingFlushIntervalMs
+        );
 
         Object failOpenValue = values.get("fail_open");
         if (failOpenValue != null) {
@@ -154,6 +164,43 @@ public class SdkConfig {
         }
         if (!(value instanceof Number numberValue)) {
             throw new IllegalArgumentException(key + " must be a number of milliseconds");
+        }
+        setter.accept(numberValue.longValue());
+    }
+
+    private void setPositiveIntIfPresent(
+        Map<String, ?> values,
+        String key,
+        java.util.function.IntConsumer setter
+    ) {
+        Object value = values.get(key);
+        if (value == null) {
+            return;
+        }
+        if (!(value instanceof Number numberValue)
+            || numberValue.doubleValue() != Math.rint(numberValue.doubleValue())
+            || numberValue.doubleValue() > Integer.MAX_VALUE
+            || numberValue.doubleValue() < Integer.MIN_VALUE
+            || numberValue.intValue() <= 0) {
+            throw new IllegalArgumentException(key + " must be a positive integer");
+        }
+        setter.accept(numberValue.intValue());
+    }
+
+    private void setPositiveLongIfPresent(
+        Map<String, ?> values,
+        String key,
+        java.util.function.LongConsumer setter
+    ) {
+        Object value = values.get(key);
+        if (!(value instanceof Number numberValue) || numberValue.longValue() <= 0) {
+            if (value != null) {
+                throw new IllegalArgumentException(key + " must be a positive integer in milliseconds");
+            }
+            return;
+        }
+        if (numberValue.doubleValue() != Math.rint(numberValue.doubleValue())) {
+            throw new IllegalArgumentException(key + " must be a positive integer in milliseconds");
         }
         setter.accept(numberValue.longValue());
     }
@@ -381,5 +428,69 @@ public class SdkConfig {
      */
     public void setMaskingTrackMaskedFields(boolean maskingTrackMaskedFields) {
         this.maskingTrackMaskedFields = maskingTrackMaskedFields;
+    }
+
+    // PUBLIC_INTERFACE
+    /**
+     * Return whether logger-level buffering is enabled.
+     *
+     * @return {@code true} when finalized events are buffered before delivery
+     */
+    public boolean isBatchingEnabled() { return batchingEnabled; }
+
+    // PUBLIC_INTERFACE
+    /**
+     * Enable or disable logger-level buffering.
+     *
+     * @param batchingEnabled whether finalized events should be buffered
+     */
+    public void setBatchingEnabled(boolean batchingEnabled) {
+        this.batchingEnabled = batchingEnabled;
+    }
+
+    // PUBLIC_INTERFACE
+    /**
+     * Return the event count that triggers an immediate batch flush.
+     *
+     * @return the positive maximum number of buffered events
+     */
+    public int getBatchingMaxSize() { return batchingMaxSize; }
+
+    // PUBLIC_INTERFACE
+    /**
+     * Configure the event count that triggers an immediate batch flush.
+     *
+     * @param batchingMaxSize positive maximum number of buffered events
+     * @throws IllegalArgumentException when the value is not positive
+     */
+    public void setBatchingMaxSize(int batchingMaxSize) {
+        if (batchingMaxSize <= 0) {
+            throw new IllegalArgumentException("batching.max_size must be a positive integer");
+        }
+        this.batchingMaxSize = batchingMaxSize;
+    }
+
+    // PUBLIC_INTERFACE
+    /**
+     * Return the maximum time a buffered event remains pending.
+     *
+     * @return the positive flush interval in milliseconds
+     */
+    public long getBatchingFlushIntervalMs() { return batchingFlushIntervalMs; }
+
+    // PUBLIC_INTERFACE
+    /**
+     * Configure the maximum time a buffered event remains pending.
+     *
+     * @param batchingFlushIntervalMs positive interval in milliseconds
+     * @throws IllegalArgumentException when the value is not positive
+     */
+    public void setBatchingFlushIntervalMs(long batchingFlushIntervalMs) {
+        if (batchingFlushIntervalMs <= 0) {
+            throw new IllegalArgumentException(
+                "batching.flush_interval_ms must be a positive integer in milliseconds"
+            );
+        }
+        this.batchingFlushIntervalMs = batchingFlushIntervalMs;
     }
 }
