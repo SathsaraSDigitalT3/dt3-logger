@@ -2,6 +2,7 @@ package com.digitalt3.commons.sdk;
 
 import com.digitalt3.commons.api.Logger;
 import com.digitalt3.commons.api.LogContext;
+import com.digitalt3.commons.api.LogEvent;
 import com.digitalt3.commons.api.SdkConfig;
 import com.digitalt3.commons.api.Timer;
 import com.digitalt3.commons.api.ValidationMode;
@@ -15,6 +16,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.UUID;
 
 /**
  * Synchronous logger that builds, masks, validates, and exports structured events.
@@ -114,6 +116,31 @@ public final class StdoutLogger implements Logger {
     @Override
     public void error(String message, Throwable error, Map<String, Object> context) {
         log("ERROR", message, context, error);
+    }
+
+    // PUBLIC_INTERFACE
+    /**
+     * Export a FATAL structured event.
+     *
+     * @param message human-readable event message
+     * @param context optional structured context
+     */
+    @Override
+    public void fatal(String message, Map<String, Object> context) {
+        log("FATAL", message, context, null);
+    }
+
+    // PUBLIC_INTERFACE
+    /**
+     * Process an existing canonical event through the normal logger pipeline.
+     *
+     * @param event canonical event to enrich, mask, validate, batch, and export
+     */
+    @Override
+    public void event(LogEvent event) {
+        ensureOpen();
+        Objects.requireNonNull(event, "event must not be null");
+        processEvent(createCanonicalEvent(event.toMap()));
     }
 
     // PUBLIC_INTERFACE
@@ -260,7 +287,17 @@ public final class StdoutLogger implements Logger {
             );
         }
 
-        Map<String, Object> event = createEvent(severity, message, context, error);
+        processEvent(createEvent(severity, message, context, error));
+    }
+
+    private void processEvent(Map<String, Object> event) {
+        ValidationMode validationMode = config.getValidationMode();
+        if (validationMode == null) {
+            throw new IllegalArgumentException(
+                "validationMode must be STRICT, LENIENT, or OFF"
+            );
+        }
+
         Map<String, Object> maskedEvent = maskingEngine.mask(event);
         List<String> maskedFields = maskingEngine.getMaskedFields();
 
@@ -427,6 +464,7 @@ public final class StdoutLogger implements Logger {
         if (context != null) {
             safeContext.putAll(context);
         }
+        ensureCorrelationId(safeContext);
         Object suppliedEventName = safeContext.get("event.name");
 
         Map<String, Object> event = new LinkedHashMap<>();
@@ -474,6 +512,42 @@ public final class StdoutLogger implements Logger {
         return event;
     }
 
+    private Map<String, Object> createCanonicalEvent(Map<String, Object> suppliedEvent) {
+        Map<String, Object> scopedContext = new LinkedHashMap<>(LogContext.activeValues());
+        Map<String, Object> event = new LinkedHashMap<>(suppliedEvent);
+        scopedContext.putAll(event);
+        ensureCorrelationId(scopedContext);
+
+        event.putAll(scopedContext);
+        event.putIfAbsent("timestamp", Instant.now().toString());
+        event.putIfAbsent("event.name", GENERIC_EVENT);
+        event.put("schema.version", valueOrDefault(config.getSchemaVersion(), "1.0.0"));
+        event.put("sdk.name", valueOrDefault(config.getSdkName(), "dt3-commons-java"));
+        event.put("sdk.version", valueOrDefault(config.getSdkVersion(), "0.1.0"));
+        putIfConfigured(event, "service.name", config.getServiceName());
+        putIfConfigured(event, "service.version", config.getServiceVersion());
+        putIfConfigured(event, "deployment.environment", config.getDeploymentEnvironment());
+        removeIfNotConfigured(event, "service.name", config.getServiceName());
+        removeIfNotConfigured(event, "service.version", config.getServiceVersion());
+        removeIfNotConfigured(event, "deployment.environment", config.getDeploymentEnvironment());
+        return event;
+    }
+
+    private void ensureCorrelationId(Map<String, Object> context) {
+        Object correlationId = context.get("correlation.id");
+        if (correlationId instanceof String text && !text.isBlank()) {
+            String scopedCorrelationId = LogContext.establishCorrelationId(text);
+            context.put("correlation.id", scopedCorrelationId == null ? text : scopedCorrelationId);
+            return;
+        }
+
+        if (config.isAutoGenerateCorrelationId()) {
+            String generatedCorrelationId = UUID.randomUUID().toString();
+            String scopedCorrelationId = LogContext.establishCorrelationId(generatedCorrelationId);
+            context.put("correlation.id", scopedCorrelationId == null ? generatedCorrelationId : scopedCorrelationId);
+        }
+    }
+
     private void ensureOpen() {
         if (closed) {
             throw new IllegalStateException("Logger is closed");
@@ -487,6 +561,12 @@ public final class StdoutLogger implements Logger {
     private void putIfConfigured(Map<String, Object> event, String field, String value) {
         if (value != null) {
             event.put(field, value);
+        }
+    }
+
+    private void putIfAbsentConfigured(Map<String, Object> event, String field, String value) {
+        if (value != null) {
+            event.putIfAbsent(field, value);
         }
     }
 

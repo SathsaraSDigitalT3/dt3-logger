@@ -13,6 +13,25 @@ public interface Logger extends AutoCloseable {
 
     // PUBLIC_INTERFACE
     /**
+     * Export a FATAL structured event through the normal processing pipeline.
+     *
+     * @param message human-readable event message
+     * @param context optional structured context
+     */
+    void fatal(String message, Map<String, Object> context);
+
+    // PUBLIC_INTERFACE
+    /**
+     * Process a canonical event through context enrichment, masking, validation,
+     * batching, and the configured transport.
+     *
+     * @param event canonical event to process; the caller's event instance is not mutated
+     * @throws IllegalArgumentException if the event is invalid in strict validation mode
+     */
+    void event(LogEvent event);
+
+    // PUBLIC_INTERFACE
+    /**
      * Create a single-use timer for a canonical named event.
      *
      * <p>The timer must be started explicitly with {@link Timer#start()} and

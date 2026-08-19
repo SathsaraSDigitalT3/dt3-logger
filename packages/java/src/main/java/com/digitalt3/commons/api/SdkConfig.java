@@ -34,6 +34,7 @@ public class SdkConfig {
     private boolean batchingEnabled;
     private int batchingMaxSize = 100;
     private long batchingFlushIntervalMs = 5000;
+    private boolean autoGenerateCorrelationId;
 
     // PUBLIC_INTERFACE
     /**
@@ -103,6 +104,11 @@ public class SdkConfig {
         setBooleanIfPresent(values, "masking.enabled", this::setMaskingEnabled);
         setStringListIfPresent(values, "masking.fields", this::setMaskingFields);
         setBooleanIfPresent(values, "batching.enabled", this::setBatchingEnabled);
+        setBooleanIfPresent(
+            values,
+            "correlation.auto_generate",
+            this::setAutoGenerateCorrelationId
+        );
         setPositiveIntIfPresent(values, "batching.max_size", this::setBatchingMaxSize);
         setPositiveLongIfPresent(
             values,
@@ -446,6 +452,29 @@ public class SdkConfig {
      */
     public void setBatchingEnabled(boolean batchingEnabled) {
         this.batchingEnabled = batchingEnabled;
+    }
+
+    // PUBLIC_INTERFACE
+    /**
+     * Return whether an absent scoped correlation ID is generated automatically.
+     *
+     * @return {@code true} when each correlation-less execution scope receives a UUID
+     */
+    public boolean isAutoGenerateCorrelationId() {
+        return autoGenerateCorrelationId;
+    }
+
+    // PUBLIC_INTERFACE
+    /**
+     * Configure automatic correlation-ID generation.
+     *
+     * <p>A UUID is generated only when no active or explicit event correlation
+     * ID exists. Explicit and extracted IDs are never replaced.</p>
+     *
+     * @param autoGenerateCorrelationId whether automatic generation is enabled
+     */
+    public void setAutoGenerateCorrelationId(boolean autoGenerateCorrelationId) {
+        this.autoGenerateCorrelationId = autoGenerateCorrelationId;
     }
 
     // PUBLIC_INTERFACE
