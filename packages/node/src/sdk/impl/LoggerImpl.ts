@@ -1,5 +1,6 @@
 import { Logger } from '../../api/Logger';
 import { Headers, LogContext, LogEvent, ValidationMode } from '../../api/types';
+import { EventBatcher } from '../batching';
 import { FileTransport } from '../FileTransport';
 import { HttpTransport } from '../HttpTransport';
 import { getActiveLogContext, withLogContext } from '../context';
@@ -8,7 +9,7 @@ import { OtlpTransport } from '../OtlpTransport';
 import { LogEventValidator, ValidationError } from '../validation';
 
 /**
- * Concrete DT3 logger that builds, validates, and exports structured events.
+ * Concrete DT3 logger that builds, validates, batches, and exports structured events.
  */
 export class LoggerImpl implements Logger {
   private readonly config: Record<string, unknown>;
@@ -20,17 +21,18 @@ export class LoggerImpl implements Logger {
   private readonly fileTransport?: FileTransport;
   private readonly httpTransport?: HttpTransport;
   private readonly otlpTransport?: OtlpTransport;
+  private readonly batcher?: EventBatcher;
   private closed = false;
 
   /**
    * Create a logger from SDK configuration.
    *
-   * @param config - Service metadata, exporter, masking, and validation configuration.
+   * @param config - Service metadata, exporter, masking, validation, and batching configuration.
    */
   constructor(config: Record<string, unknown>) {
     this.config = config;
     this.exporter = typeof config.exporter === 'string' ? config.exporter : 'stdout';
-    this.failOpen = config.fail_open !== false;
+    this.failOpen = this.requireBoolean(config.fail_open ?? true, 'fail_open');
     this.fileTransport =
       this.exporter === 'file'
         ? new FileTransport(
@@ -68,6 +70,31 @@ export class LoggerImpl implements Logger {
       enabled: config['masking.enabled'] !== false,
     });
     this.validator = new LogEventValidator();
+
+    if (this.requireBoolean(config['batching.enabled'] ?? false, 'batching.enabled')) {
+      const maxSize = this.resolveBatchingNumber(config['batching.max_size'], 'batching.max_size', 100);
+      const flushIntervalMs = this.resolveBatchingNumber(
+        config['batching.flush_interval_ms'],
+        'batching.flush_interval_ms',
+        5000,
+      );
+
+      this.batcher = new EventBatcher(
+        (event) => this.exportWithPolicy(event),
+        maxSize,
+        flushIntervalMs,
+      );
+    }
+  }
+
+  private resolveBatchingNumber(value: unknown, key: string, defaultValue: number): number {
+    if (value === undefined) {
+      return defaultValue;
+    }
+    if (typeof value !== 'number') {
+      throw new Error(`${key} must be a number`);
+    }
+    return value;
   }
 
   private resolveValidationMode(value: unknown): ValidationMode {
@@ -131,9 +158,36 @@ export class LoggerImpl implements Logger {
     }
   }
 
+  private requireBoolean(value: unknown, key: string): boolean {
+    if (typeof value !== 'boolean') {
+      throw new Error(`${key} must be a boolean`);
+    }
+    return value;
+  }
+
   private handleDeliveryFailure(error: unknown): void {
     if (!this.failOpen) {
       throw error;
+    }
+  }
+
+  private export(event: LogEvent): void {
+    if (this.exporter === 'stdout') {
+      console.log(JSON.stringify(event));
+    } else if (this.exporter === 'file') {
+      this.fileTransport?.export(event);
+    } else if (this.exporter === 'http') {
+      this.httpTransport?.export(event);
+    } else if (this.exporter === 'otlp') {
+      this.otlpTransport?.export(event);
+    }
+  }
+
+  private exportWithPolicy(event: LogEvent): void {
+    try {
+      this.export(event);
+    } catch (deliveryError) {
+      this.handleDeliveryFailure(deliveryError);
     }
   }
 
@@ -195,18 +249,10 @@ export class LoggerImpl implements Logger {
       }
     }
 
-    try {
-      if (this.exporter === 'stdout') {
-        console.log(JSON.stringify(maskedEvent));
-      } else if (this.exporter === 'file') {
-        this.fileTransport?.export(maskedEvent as LogEvent);
-      } else if (this.exporter === 'http') {
-        this.httpTransport?.export(maskedEvent as LogEvent);
-      } else if (this.exporter === 'otlp') {
-        this.otlpTransport?.export(maskedEvent as LogEvent);
-      }
-    } catch (deliveryError) {
-      this.handleDeliveryFailure(deliveryError);
+    if (this.batcher) {
+      this.batcher.add(maskedEvent as LogEvent);
+    } else {
+      this.exportWithPolicy(maskedEvent as LogEvent);
     }
   }
 
@@ -270,7 +316,7 @@ export class LoggerImpl implements Logger {
 
   // PUBLIC_INTERFACE
   /**
-   * Settle delivery work initiated before the flush boundary.
+   * Flush buffered events and settle delivery work initiated before the flush boundary.
    *
    * @returns A promise that rejects only when a delivery failure is configured
    * to fail closed.
@@ -279,6 +325,7 @@ export class LoggerImpl implements Logger {
     this.ensureOpen();
 
     try {
+      this.batcher?.flush();
       this.fileTransport?.flush();
       await this.httpTransport?.flush();
       await this.otlpTransport?.flush();
@@ -289,7 +336,7 @@ export class LoggerImpl implements Logger {
 
   // PUBLIC_INTERFACE
   /**
-   * Close the logger and its active transport.
+   * Flush remaining events, close the active transport, and prevent future logging.
    *
    * Closing is idempotent. Subsequent logging and flush calls fail with a
    * documented terminal-state error.
@@ -300,6 +347,12 @@ export class LoggerImpl implements Logger {
     }
 
     this.closed = true;
+    try {
+      this.batcher?.close();
+      this.fileTransport?.flush();
+    } catch (error) {
+      this.handleDeliveryFailure(error);
+    }
     this.httpTransport?.close();
     this.otlpTransport?.close();
   }

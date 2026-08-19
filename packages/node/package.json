@@ -6,7 +6,7 @@
   "types": "dist/index.d.ts",
   "scripts": {
     "verify:schema": "node scripts/verify-canonical-schema.js",
-    "build": "npm run verify:schema && tsc",
+    "build": "npm run verify:schema && tsc --build --clean && tsc --build",
     "test": "npm run verify:schema && jest",
     "lint": "eslint \"src/**/*.ts\" \"tests/**/*.ts\""
   },
