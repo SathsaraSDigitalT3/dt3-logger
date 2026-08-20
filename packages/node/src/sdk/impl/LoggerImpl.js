@@ -2,35 +2,39 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.LoggerImpl = void 0;
 const types_1 = require("../../api/types");
+const batching_1 = require("../batching");
 const FileTransport_1 = require("../FileTransport");
 const HttpTransport_1 = require("../HttpTransport");
 const context_1 = require("../context");
 const masking_1 = require("../masking");
 const OtlpTransport_1 = require("../OtlpTransport");
+const Timer_1 = require("../Timer");
 const validation_1 = require("../validation");
 /**
- * Concrete DT3 logger that builds, validates, and exports structured events.
+ * Concrete DT3 logger that builds, validates, batches, and exports structured events.
  */
 class LoggerImpl {
     config;
     exporter;
     failOpen;
     validationMode;
+    autoGenerateCorrelationId;
     maskingEngine;
     validator;
     fileTransport;
     httpTransport;
     otlpTransport;
+    batcher;
     closed = false;
     /**
      * Create a logger from SDK configuration.
      *
-     * @param config - Service metadata, exporter, masking, and validation configuration.
+     * @param config - Service metadata, exporter, masking, validation, and batching configuration.
      */
     constructor(config) {
         this.config = config;
         this.exporter = typeof config.exporter === 'string' ? config.exporter : 'stdout';
-        this.failOpen = config.fail_open !== false;
+        this.failOpen = this.requireBoolean(config.fail_open ?? true, 'fail_open');
         this.fileTransport =
             this.exporter === 'file'
                 ? new FileTransport_1.FileTransport(typeof config['exporter.file.path'] === 'string' ? config['exporter.file.path'] : '')
@@ -46,6 +50,7 @@ class LoggerImpl {
                 ? new OtlpTransport_1.OtlpTransport(typeof config['otlp.endpoint'] === 'string' ? config['otlp.endpoint'] : '', typeof config['otlp.timeout'] === 'number' ? config['otlp.timeout'] : 10000, this.resolveHeaders(config['otlp.headers'], 'otlp.headers'))
                 : undefined;
         this.validationMode = this.resolveValidationMode(config['validation.mode']);
+        this.autoGenerateCorrelationId = this.requireBoolean(config['tracing.auto_generate_correlation_id'] ?? false, 'tracing.auto_generate_correlation_id');
         this.maskingEngine = new masking_1.MaskingEngine({
             sensitiveFields: Array.isArray(config['masking.fields'])
                 ? config['masking.fields'].filter((field) => typeof field === 'string')
@@ -57,6 +62,20 @@ class LoggerImpl {
             enabled: config['masking.enabled'] !== false,
         });
         this.validator = new validation_1.LogEventValidator();
+        if (this.requireBoolean(config['batching.enabled'] ?? false, 'batching.enabled')) {
+            const maxSize = this.resolveBatchingNumber(config['batching.max_size'], 'batching.max_size', 100);
+            const flushIntervalMs = this.resolveBatchingNumber(config['batching.flush_interval_ms'], 'batching.flush_interval_ms', 5000);
+            this.batcher = new batching_1.EventBatcher((event) => this.exportWithPolicy(event), maxSize, flushIntervalMs);
+        }
+    }
+    resolveBatchingNumber(value, key, defaultValue) {
+        if (value === undefined) {
+            return defaultValue;
+        }
+        if (typeof value !== 'number') {
+            throw new Error(`${key} must be a number`);
+        }
+        return value;
     }
     resolveValidationMode(value) {
         const normalizedMode = typeof value === 'string' ? value.toUpperCase() : types_1.ValidationMode.LENIENT;
@@ -103,16 +122,53 @@ class LoggerImpl {
             throw new Error('Logger is closed');
         }
     }
+    /**
+     * Verify that the logger remains usable by a timer lifecycle operation.
+     *
+     * This intentionally delegates to the existing logger lifecycle gate so
+     * timers fail with the same documented closed-logger error as log methods.
+     */
+    ensureTimerLoggerOpen() {
+        this.ensureOpen();
+    }
+    requireBoolean(value, key) {
+        if (typeof value !== 'boolean') {
+            throw new Error(`${key} must be a boolean`);
+        }
+        return value;
+    }
     handleDeliveryFailure(error) {
         if (!this.failOpen) {
             throw error;
+        }
+    }
+    export(event) {
+        if (this.exporter === 'stdout') {
+            console.log(JSON.stringify(event));
+        }
+        else if (this.exporter === 'file') {
+            this.fileTransport?.export(event);
+        }
+        else if (this.exporter === 'http') {
+            this.httpTransport?.export(event);
+        }
+        else if (this.exporter === 'otlp') {
+            this.otlpTransport?.export(event);
+        }
+    }
+    exportWithPolicy(event) {
+        try {
+            this.export(event);
+        }
+        catch (deliveryError) {
+            this.handleDeliveryFailure(deliveryError);
         }
     }
     log(level, message, context, error) {
         this.ensureOpen();
         // Explicit event context intentionally overrides values inherited from the
         // active execution scope. Logger-owned fields are asserted below.
-        const callerContext = { ...(0, context_1.getActiveLogContext)(), ...context };
+        const callerContext = { ...(0, context_1.ensureCorrelationId)((0, context_1.getActiveLogContext)(), this.autoGenerateCorrelationId), ...context };
         const eventName = typeof callerContext['event.name'] === 'string' ? callerContext['event.name'] : 'GENERIC_EVENT';
         const logEvent = { ...callerContext };
         // The logger owns these fields; setting them after context prevents caller
@@ -150,22 +206,11 @@ class LoggerImpl {
                 maskedEvent['dt3.validation.errors'] = validationResult.errors;
             }
         }
-        try {
-            if (this.exporter === 'stdout') {
-                console.log(JSON.stringify(maskedEvent));
-            }
-            else if (this.exporter === 'file') {
-                this.fileTransport?.export(maskedEvent);
-            }
-            else if (this.exporter === 'http') {
-                this.httpTransport?.export(maskedEvent);
-            }
-            else if (this.exporter === 'otlp') {
-                this.otlpTransport?.export(maskedEvent);
-            }
+        if (this.batcher) {
+            this.batcher.add(maskedEvent);
         }
-        catch (deliveryError) {
-            this.handleDeliveryFailure(deliveryError);
+        else {
+            this.exportWithPolicy(maskedEvent);
         }
     }
     // PUBLIC_INTERFACE
@@ -221,9 +266,45 @@ class LoggerImpl {
     error(message, error, context) {
         this.log('ERROR', message, context, error);
     }
+    fatal(message, context) {
+        this.log(types_1.Severity.FATAL, message, context);
+    }
+    event(event) {
+        if (event === null || typeof event !== 'object' || Array.isArray(event)) {
+            throw new TypeError('event must be an object');
+        }
+        const suppliedEvent = { ...event };
+        const message = suppliedEvent.message;
+        if (typeof message !== 'string') {
+            throw new TypeError('event.message must be a string');
+        }
+        delete suppliedEvent.message;
+        const severity = typeof suppliedEvent.severity === 'string' ? suppliedEvent.severity.toUpperCase() : 'INFO';
+        delete suppliedEvent.severity;
+        if (!Object.values(types_1.Severity).includes(severity)) {
+            throw new Error('event.severity must be a supported severity');
+        }
+        this.log(severity, message, suppliedEvent);
+    }
     // PUBLIC_INTERFACE
     /**
-     * Settle delivery work initiated before the flush boundary.
+     * Create an unstarted timer that emits a canonical INFO completion event.
+     *
+     * Completion delegates to info, preserving active context, masking,
+     * validation, batching, and the configured transport/exporter behavior.
+     *
+     * @param name - Non-blank canonical event name for the completion event.
+     * @param context - Optional event metadata for the completion event.
+     * @returns A new unstarted timer.
+     * @throws Error when the logger is closed or the timer name is invalid.
+     */
+    createTimer(name, context) {
+        this.ensureOpen();
+        return new Timer_1.TimerImpl(this, name, context);
+    }
+    // PUBLIC_INTERFACE
+    /**
+     * Flush buffered events and settle delivery work initiated before the flush boundary.
      *
      * @returns A promise that rejects only when a delivery failure is configured
      * to fail closed.
@@ -231,6 +312,7 @@ class LoggerImpl {
     async flush() {
         this.ensureOpen();
         try {
+            this.batcher?.flush();
             this.fileTransport?.flush();
             await this.httpTransport?.flush();
             await this.otlpTransport?.flush();
@@ -241,7 +323,7 @@ class LoggerImpl {
     }
     // PUBLIC_INTERFACE
     /**
-     * Close the logger and its active transport.
+     * Flush remaining events, close the active transport, and prevent future logging.
      *
      * Closing is idempotent. Subsequent logging and flush calls fail with a
      * documented terminal-state error.
@@ -251,6 +333,13 @@ class LoggerImpl {
             return;
         }
         this.closed = true;
+        try {
+            this.batcher?.close();
+            this.fileTransport?.flush();
+        }
+        catch (error) {
+            this.handleDeliveryFailure(error);
+        }
         this.httpTransport?.close();
         this.otlpTransport?.close();
     }

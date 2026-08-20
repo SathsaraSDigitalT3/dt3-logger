@@ -1,30 +1,38 @@
 import { Logger } from '../../api/Logger';
-import { LogContext } from '../../api/types';
+import { Timer, TimerContext } from '../../api/Timer';
+import { LogContext, LogEvent } from '../../api/types';
 /**
- * Concrete DT3 logger that builds, validates, and exports structured events.
+ * Concrete DT3 logger that builds, validates, batches, and exports structured events.
  */
 export declare class LoggerImpl implements Logger {
     private readonly config;
     private readonly exporter;
     private readonly failOpen;
     private readonly validationMode;
+    private readonly autoGenerateCorrelationId;
     private readonly maskingEngine;
     private readonly validator;
     private readonly fileTransport?;
     private readonly httpTransport?;
     private readonly otlpTransport?;
+    private readonly batcher?;
     private closed;
     /**
      * Create a logger from SDK configuration.
      *
-     * @param config - Service metadata, exporter, masking, and validation configuration.
+     * @param config - Service metadata, exporter, masking, validation, and batching configuration.
      */
     constructor(config: Record<string, unknown>);
+    private resolveBatchingNumber;
     private resolveValidationMode;
     private resolveHttpTimeout;
     private resolveHeaders;
     private ensureOpen;
+    ensureTimerLoggerOpen(): void;
+    private requireBoolean;
     private handleDeliveryFailure;
+    private export;
+    private exportWithPolicy;
     private log;
     /**
      * Export a DEBUG log event.
@@ -64,15 +72,26 @@ export declare class LoggerImpl implements Logger {
      * @param context - Optional structured event context.
      */
     error(message: string, error?: Error, context?: Record<string, unknown>): void;
+    fatal(message: string, context?: Record<string, unknown>): void;
+    event(event: LogEvent): void;
     /**
-     * Settle delivery work initiated before the flush boundary.
+     * Create an unstarted timer that emits a canonical INFO completion event.
+     *
+     * @param name - Non-blank canonical event name for the completion event.
+     * @param context - Optional event metadata for the completion event.
+     * @returns A new unstarted timer.
+     * @throws Error when the logger is closed or the timer name is invalid.
+     */
+    createTimer(name: string, context?: TimerContext): Timer;
+    /**
+     * Flush buffered events and settle delivery work initiated before the flush boundary.
      *
      * @returns A promise that rejects only when a delivery failure is configured
      * to fail closed.
      */
     flush(): Promise<void>;
     /**
-     * Close the logger and its active transport.
+     * Flush remaining events, close the active transport, and prevent future logging.
      *
      * Closing is idempotent. Subsequent logging and flush calls fail with a
      * documented terminal-state error.

@@ -5,9 +5,10 @@ from __future__ import annotations
 import json
 import traceback
 from datetime import datetime, timezone
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict, Mapping, Optional
 
-from dt3_sdk.context import get_active_logger_context
+from dt3_sdk.batching import EventBatcher
+from dt3_sdk.context import ensure_correlation_id, get_active_logger_context
 from dt3_sdk.file_transport import FileTransport
 from dt3_sdk.http_transport import HttpTransport
 from dt3_sdk.masking import MaskingEngine
@@ -16,7 +17,7 @@ from dt3_sdk.validation import LogEventValidator, ValidationError
 
 
 class LoggerImpl:
-    """Build, mask, validate, and export structured DT3 log events."""
+    """Build, mask, validate, batch, and export structured DT3 log events."""
 
     def __init__(self, config: Dict[str, Any]):
         """Initialize a logger from canonical or legacy-compatible SDK configuration.
@@ -27,8 +28,8 @@ class LoggerImpl:
 
         Args:
             config: SDK configuration including service metadata, masking settings,
-                validation mode, exporter selection, failure policy, and exporter
-                destination settings.
+                validation mode, exporter selection, failure policy, batching, and
+                exporter destination settings.
 
         Raises:
             ValueError: If configuration is invalid or an unsupported exporter is set.
@@ -57,7 +58,12 @@ class LoggerImpl:
         self._file_transport: Optional[FileTransport] = None
         self._http_transport: Optional[HttpTransport] = None
         self._otlp_transport: Optional[OtlpTransport] = None
+        self._batcher: Optional[EventBatcher] = None
         self._closed = False
+        self._auto_generate_correlation_id = self._require_boolean(
+            self.config.get("tracing.auto_generate_correlation_id", False),
+            "tracing.auto_generate_correlation_id",
+        )
 
         if self.exporter == "file":
             self._file_transport = FileTransport(
@@ -86,6 +92,16 @@ class LoggerImpl:
         elif self.exporter != "stdout":
             raise ValueError(f"Unsupported exporter: {self.exporter}")
 
+        if self._require_boolean(
+            self.config.get("batching.enabled", False),
+            "batching.enabled",
+        ):
+            self._batcher = EventBatcher(
+                self._export_with_policy,
+                max_size=self.config.get("batching.max_size", 100),
+                flush_interval_ms=self.config.get("batching.flush_interval_ms", 5000),
+            )
+
     def _log(
         self,
         level: str,
@@ -93,12 +109,15 @@ class LoggerImpl:
         context: Optional[Dict[str, Any]] = None,
         error: Optional[Exception] = None,
     ) -> None:
-        """Create, mask, validate, and export one structured log event."""
+        """Create, mask, validate, then batch or export one structured log event."""
         self._ensure_open()
         # ContextVars provide request/task-local state. Explicit per-event
         # context intentionally wins over active scope values, preserving the
         # logger's established caller-context precedence behavior.
-        caller_context = get_active_logger_context()
+        caller_context = ensure_correlation_id(
+            get_active_logger_context(),
+            auto_generate=self._auto_generate_correlation_id,
+        )
         caller_context.update(context or {})
         event_name = caller_context.get("event.name")
         if not isinstance(event_name, str):
@@ -165,7 +184,10 @@ class LoggerImpl:
                     detail.to_dict() for detail in validation_result.errors
                 ]
 
-        self._deliver(lambda: self._export(masked_event))
+        if self._batcher is not None:
+            self._batcher.add(masked_event)
+        else:
+            self._export_with_policy(masked_event)
 
     def _export(self, event: Dict[str, Any]) -> None:
         """Deliver an already processed final event through the selected exporter."""
@@ -177,6 +199,10 @@ class LoggerImpl:
             self._http_transport.export(event)
         elif self._otlp_transport is not None:
             self._otlp_transport.export(event)
+
+    def _export_with_policy(self, event: Dict[str, Any]) -> None:
+        """Deliver one final event under the configured delivery failure policy."""
+        self._deliver(lambda: self._export(event))
 
     def _deliver(self, operation: Callable[[], None]) -> None:
         """Apply the configured delivery-only failure policy to one operation."""
@@ -274,6 +300,11 @@ class LoggerImpl:
         self._log("WARN", message, context)
 
     # PUBLIC_INTERFACE
+    def fatal(self, message: str, context: Optional[Dict[str, Any]] = None) -> None:
+        """Export a FATAL log event through the canonical processing pipeline."""
+        self._log("FATAL", message, context)
+
+    # PUBLIC_INTERFACE
     def error(
         self,
         message: str,
@@ -284,9 +315,42 @@ class LoggerImpl:
         self._log("ERROR", message, context, error)
 
     # PUBLIC_INTERFACE
+    def event(self, event_object: Mapping[str, Any]) -> None:
+        """Process a canonical log event through masking, validation, and export.
+
+        Method-owned fields remain authoritative for event construction. The
+        supplied severity determines the logging method pipeline used, while
+        all other event fields are preserved as caller context.
+
+        Args:
+            event_object: Canonical event fields, including a string message and
+                optional severity. The mapping is never mutated.
+
+        Raises:
+            TypeError: If the supplied event is not a mapping or message is not a string.
+            ValueError: If its severity is unsupported.
+            RuntimeError: If the logger is closed.
+        """
+        if not isinstance(event_object, Mapping):
+            raise TypeError("event_object must be a mapping")
+
+        supplied_event = dict(event_object)
+        message = supplied_event.pop("message", "")
+        if not isinstance(message, str):
+            raise TypeError("event_object.message must be a string")
+
+        severity = str(supplied_event.pop("severity", "INFO")).upper()
+        if severity not in {"DEBUG", "INFO", "WARN", "ERROR", "FATAL"}:
+            raise ValueError("event_object.severity must be a supported severity")
+        self._log(severity, message, supplied_event)
+
+    # PUBLIC_INTERFACE
     def flush(self) -> None:
-        """Flush the selected exporter using the configured delivery failure policy."""
+        """Synchronously flush buffered events and the selected exporter."""
         self._ensure_open()
+        if self._batcher is not None:
+            self._batcher.flush()
+
         if self._file_transport is not None:
             self._deliver(self._file_transport.flush)
         elif self._http_transport is not None:
@@ -296,13 +360,42 @@ class LoggerImpl:
 
     # PUBLIC_INTERFACE
     def close(self) -> None:
-        """Close the selected exporter using the configured delivery failure policy."""
+        """Flush remaining events, then close the selected exporter."""
         if self._closed:
             return
         self._closed = True
+
+        if self._batcher is not None:
+            self._deliver(self._batcher.close)
+
         if self._file_transport is not None:
             self._deliver(self._file_transport.close)
         elif self._http_transport is not None:
             self._deliver(self._http_transport.close)
         elif self._otlp_transport is not None:
             self._deliver(self._otlp_transport.close)
+
+    # PUBLIC_INTERFACE
+    def create_timer(
+        self,
+        name: str,
+        context: Optional[Dict[str, Any]] = None,
+    ) -> "TimerImpl":
+        """Create an unstarted Timer that emits a canonical completion event.
+
+        Args:
+            name: Non-empty canonical event name for the completion event.
+            context: Optional metadata merged with active logger context at finish.
+
+        Returns:
+            A new unstarted TimerImpl instance.
+
+        Raises:
+            RuntimeError: If the logger is closed.
+            TypeError: If the name or context has an unsupported type.
+            ValueError: If the name is blank.
+        """
+        from dt3_sdk.timer import TimerImpl
+
+        self._ensure_open()
+        return TimerImpl(self, name, context)

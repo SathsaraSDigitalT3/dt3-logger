@@ -21,6 +21,11 @@ export interface LogContext {
     spanId?: string;
     parentSpanId?: string;
     correlationId?: string;
+    tenantId?: string;
+    tenantRegion?: string;
+    tenantEnvironment?: string;
+    'trace.flags'?: string;
+    tracestate?: string;
 }
 /** Structured attributes attached to a log event. */
 export type Attributes = Record<string, unknown>;
@@ -176,4 +181,6 @@ export interface SdkConfig {
     'batching.max_size'?: number;
     /** Batch flush interval in milliseconds.  Defaults to `5000`. */
     'batching.flush_interval_ms'?: number;
+    /** Generate a UUID correlation ID when a scoped value is absent. Defaults to `false`. */
+    'tracing.auto_generate_correlation_id'?: boolean;
 }

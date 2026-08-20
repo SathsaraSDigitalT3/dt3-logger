@@ -11,3 +11,6 @@ if (normalize(repositorySchema) !== normalize(packagedSchema)) {
     'Node packaged log-event schema differs from schemas/log-event.schema.json. Copy the canonical schema before building.',
   );
 }
+
+console.log('Canonical Node schema verified.');
+process.exitCode = 0;

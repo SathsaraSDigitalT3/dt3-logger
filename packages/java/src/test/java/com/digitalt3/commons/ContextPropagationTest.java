@@ -116,7 +116,7 @@ public class ContextPropagationTest {
     }
 
     @Test
-    public void explicitEventContextOverridesScopeWhileLoggerOwnedFieldsWin() {
+    public void scopeCorrelationIdWinsWhileEventContextAndLoggerOwnedFieldsRetainPrecedence() {
         List<JsonNode> events = captureStdout(() -> {
             Logger logger = LoggerFactory.createLogger(baseConfig());
 
@@ -135,7 +135,7 @@ public class ContextPropagationTest {
 
         JsonNode event = events.get(0);
         assertEquals(TRACE_B, event.path("trace.id").asText());
-        assertEquals("event", event.path("correlation.id").asText());
+        assertEquals("scope", event.path("correlation.id").asText());
         assertEquals("WARN", event.path("severity").asText());
         assertEquals("context-test-service", event.path("service.name").asText());
     }

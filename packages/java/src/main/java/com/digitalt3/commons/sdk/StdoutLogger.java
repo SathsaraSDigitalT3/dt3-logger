@@ -2,7 +2,9 @@ package com.digitalt3.commons.sdk;
 
 import com.digitalt3.commons.api.Logger;
 import com.digitalt3.commons.api.LogContext;
+import com.digitalt3.commons.api.LogEvent;
 import com.digitalt3.commons.api.SdkConfig;
+import com.digitalt3.commons.api.Timer;
 import com.digitalt3.commons.api.ValidationMode;
 import com.digitalt3.commons.api.Validator;
 
@@ -14,6 +16,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.UUID;
 
 /**
  * Synchronous logger that builds, masks, validates, and exports structured events.
@@ -27,6 +30,7 @@ import java.util.Objects;
 public final class StdoutLogger implements Logger {
 
     private static final String GENERIC_EVENT = "GENERIC_EVENT";
+    private static final String CANONICAL_EVENT_NAME_PATTERN = "^[A-Z][A-Z0-9_]*$";
 
     private final SdkConfig config;
     private final RecursiveMaskingEngine maskingEngine;
@@ -34,6 +38,7 @@ public final class StdoutLogger implements Logger {
     private final FileTransport fileTransport;
     private final HttpTransport httpTransport;
     private final OtlpTransport otlpTransport;
+    private final EventBatcher batcher;
     private boolean closed;
 
     /**
@@ -55,6 +60,13 @@ public final class StdoutLogger implements Logger {
         this.fileTransport = createFileTransport(config);
         this.httpTransport = createHttpTransport(config);
         this.otlpTransport = createOtlpTransport(config);
+        this.batcher = config.isBatchingEnabled()
+            ? new EventBatcher(
+                this::writeFinalEvent,
+                config.getBatchingMaxSize(),
+                config.getBatchingFlushIntervalMs()
+            )
+            : null;
     }
 
     // PUBLIC_INTERFACE
@@ -108,11 +120,55 @@ public final class StdoutLogger implements Logger {
 
     // PUBLIC_INTERFACE
     /**
+     * Export a FATAL structured event.
+     *
+     * @param message human-readable event message
+     * @param context optional structured context
+     */
+    @Override
+    public void fatal(String message, Map<String, Object> context) {
+        log("FATAL", message, context, null);
+    }
+
+    // PUBLIC_INTERFACE
+    /**
+     * Process an existing canonical event through the normal logger pipeline.
+     *
+     * @param event canonical event to enrich, mask, validate, batch, and export
+     */
+    @Override
+    public void event(LogEvent event) {
+        ensureOpen();
+        Objects.requireNonNull(event, "event must not be null");
+        processEvent(createCanonicalEvent(event.toMap()));
+    }
+
+    // PUBLIC_INTERFACE
+    /**
+     * Create an unstarted single-use timer associated with this logger.
+     *
+     * @param name canonical UPPER_SNAKE_CASE completion event name
+     * @return a new timer which emits through this logger on completion
+     * @throws IllegalArgumentException if the supplied event name is invalid
+     * @throws IllegalStateException if the logger is closed
+     */
+    @Override
+    public synchronized Timer createTimer(String name) {
+        ensureOpen();
+        validateTimerName(name);
+        return new LoggerTimer(name);
+    }
+
+    // PUBLIC_INTERFACE
+    /**
      * Flush the configured synchronous transport.
      */
     @Override
     public void flush() {
         ensureOpen();
+        if (batcher != null) {
+            batcher.flush();
+        }
         if (fileTransport != null) {
             try {
                 fileTransport.flush();
@@ -153,6 +209,13 @@ public final class StdoutLogger implements Logger {
     public synchronized void close() {
         if (closed) {
             return;
+        }
+        if (batcher != null) {
+            try {
+                batcher.close();
+            } catch (HttpTransportError | OtlpTransportError | IllegalStateException exception) {
+                handleTransportFailure(exception);
+            }
         }
         closed = true;
 
@@ -224,7 +287,17 @@ public final class StdoutLogger implements Logger {
             );
         }
 
-        Map<String, Object> event = createEvent(severity, message, context, error);
+        processEvent(createEvent(severity, message, context, error));
+    }
+
+    private void processEvent(Map<String, Object> event) {
+        ValidationMode validationMode = config.getValidationMode();
+        if (validationMode == null) {
+            throw new IllegalArgumentException(
+                "validationMode must be STRICT, LENIENT, or OFF"
+            );
+        }
+
         Map<String, Object> maskedEvent = maskingEngine.mask(event);
         List<String> maskedFields = maskingEngine.getMaskedFields();
 
@@ -250,9 +323,107 @@ public final class StdoutLogger implements Logger {
         }
 
         try {
-            writeFinalEvent(maskedEvent);
+            if (batcher != null) {
+                batcher.add(maskedEvent);
+            } else {
+                writeFinalEvent(maskedEvent);
+            }
         } catch (HttpTransportError | OtlpTransportError | IllegalStateException exception) {
             handleTransportFailure(exception);
+        }
+    }
+
+    private void validateTimerName(String name) {
+        if (name == null || name.trim().isEmpty() || !name.matches(CANONICAL_EVENT_NAME_PATTERN)) {
+            throw new IllegalArgumentException(
+                "timer name must be a canonical UPPER_SNAKE_CASE event name"
+            );
+        }
+    }
+
+    /**
+     * Monotonic single-use timer that delegates completion to the owning logger.
+     */
+    private final class LoggerTimer implements Timer {
+        private final String name;
+        private boolean started;
+        private boolean completed;
+        private long startedAtNanos;
+        private long measuredDurationMs;
+
+        private LoggerTimer(String name) {
+            this.name = name;
+        }
+
+        // PUBLIC_INTERFACE
+        /**
+         * Start this timer using the JVM monotonic clock.
+         *
+         * @return this timer
+         */
+        @Override
+        public synchronized Timer start() {
+            ensureOpen();
+            if (started) {
+                throw new IllegalStateException("Timer has already started");
+            }
+
+            started = true;
+            startedAtNanos = System.nanoTime();
+            return this;
+        }
+
+        // PUBLIC_INTERFACE
+        /**
+         * Stop once and emit the timer completion event through the logger pipeline.
+         *
+         * @return the measured non-negative duration in milliseconds
+         */
+        @Override
+        public synchronized long stop() {
+            ensureOpen();
+            if (!started) {
+                throw new IllegalStateException("Timer has not started");
+            }
+            if (completed) {
+                throw new IllegalStateException("Timer has already completed");
+            }
+
+            long elapsedNanos = System.nanoTime() - startedAtNanos;
+            measuredDurationMs = Math.max(0L, elapsedNanos / 1_000_000L);
+            completed = true;
+            log(
+                "INFO",
+                name,
+                Map.of("event.name", name, "duration.ms", measuredDurationMs),
+                null
+            );
+            return measuredDurationMs;
+        }
+
+        // PUBLIC_INTERFACE
+        /**
+         * Complete this timer as an alias for {@link #stop()}.
+         *
+         * @return the measured non-negative duration in milliseconds
+         */
+        @Override
+        public long finish() {
+            return stop();
+        }
+
+        // PUBLIC_INTERFACE
+        /**
+         * Return the completed timer's measured duration.
+         *
+         * @return measured non-negative duration in milliseconds
+         */
+        @Override
+        public synchronized long durationMs() {
+            if (!completed) {
+                throw new IllegalStateException("Timer has not completed");
+            }
+            return measuredDurationMs;
         }
     }
 
@@ -293,6 +464,7 @@ public final class StdoutLogger implements Logger {
         if (context != null) {
             safeContext.putAll(context);
         }
+        ensureCorrelationId(safeContext);
         Object suppliedEventName = safeContext.get("event.name");
 
         Map<String, Object> event = new LinkedHashMap<>();
@@ -340,6 +512,42 @@ public final class StdoutLogger implements Logger {
         return event;
     }
 
+    private Map<String, Object> createCanonicalEvent(Map<String, Object> suppliedEvent) {
+        Map<String, Object> scopedContext = new LinkedHashMap<>(LogContext.activeValues());
+        Map<String, Object> event = new LinkedHashMap<>(suppliedEvent);
+        scopedContext.putAll(event);
+        ensureCorrelationId(scopedContext);
+
+        event.putAll(scopedContext);
+        event.putIfAbsent("timestamp", Instant.now().toString());
+        event.putIfAbsent("event.name", GENERIC_EVENT);
+        event.put("schema.version", valueOrDefault(config.getSchemaVersion(), "1.0.0"));
+        event.put("sdk.name", valueOrDefault(config.getSdkName(), "dt3-commons-java"));
+        event.put("sdk.version", valueOrDefault(config.getSdkVersion(), "0.1.0"));
+        putIfConfigured(event, "service.name", config.getServiceName());
+        putIfConfigured(event, "service.version", config.getServiceVersion());
+        putIfConfigured(event, "deployment.environment", config.getDeploymentEnvironment());
+        removeIfNotConfigured(event, "service.name", config.getServiceName());
+        removeIfNotConfigured(event, "service.version", config.getServiceVersion());
+        removeIfNotConfigured(event, "deployment.environment", config.getDeploymentEnvironment());
+        return event;
+    }
+
+    private void ensureCorrelationId(Map<String, Object> context) {
+        Object correlationId = context.get("correlation.id");
+        if (correlationId instanceof String text && !text.isBlank()) {
+            String scopedCorrelationId = LogContext.establishCorrelationId(text);
+            context.put("correlation.id", scopedCorrelationId == null ? text : scopedCorrelationId);
+            return;
+        }
+
+        if (config.isAutoGenerateCorrelationId()) {
+            String generatedCorrelationId = UUID.randomUUID().toString();
+            String scopedCorrelationId = LogContext.establishCorrelationId(generatedCorrelationId);
+            context.put("correlation.id", scopedCorrelationId == null ? generatedCorrelationId : scopedCorrelationId);
+        }
+    }
+
     private void ensureOpen() {
         if (closed) {
             throw new IllegalStateException("Logger is closed");
@@ -353,6 +561,12 @@ public final class StdoutLogger implements Logger {
     private void putIfConfigured(Map<String, Object> event, String field, String value) {
         if (value != null) {
             event.put(field, value);
+        }
+    }
+
+    private void putIfAbsentConfigured(Map<String, Object> event, String field, String value) {
+        if (value != null) {
+            event.putIfAbsent(field, value);
         }
     }
 
