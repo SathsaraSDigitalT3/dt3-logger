@@ -9,6 +9,8 @@ from typing import Any, Callable, Dict, Mapping, Optional
 
 from dt3_sdk.batching import EventBatcher
 from dt3_sdk.context import ensure_correlation_id, get_active_logger_context
+from dt3_sdk.error_handler import ErrorHandler
+from dt3_sdk.errors import Dt3Error, Dt3ErrorPhase, Dt3MaskingError
 from dt3_sdk.file_transport import FileTransport
 from dt3_sdk.http_transport import HttpTransport
 from dt3_sdk.masking import MaskingEngine
@@ -43,6 +45,22 @@ class LoggerImpl:
         self.fail_open = self._require_boolean(
             self.config.get("fail_open", True),
             "fail_open",
+        )
+        self.error_handler = ErrorHandler(
+            fail_open=self.fail_open,
+            diagnostics_enabled=self._require_boolean(
+                self.config.get("error.diagnostics.enabled", True),
+                "error.diagnostics.enabled",
+            ),
+            include_stack=self._require_boolean(
+                self.config.get("error.include_stack", False),
+                "error.include_stack",
+            ),
+            rate_limit_per_minute=self.config.get(
+                "error.rate_limit_per_minute",
+                20,
+            ),
+            on_error=self.config.get("error.on_error"),
         )
         self.masking_engine = MaskingEngine(
             sensitive_fields=self.config.get("masking.fields"),
@@ -90,7 +108,9 @@ class LoggerImpl:
                 headers=self._config_value("otlp.headers", default=None),
             )
         elif self.exporter != "stdout":
-            raise ValueError(f"Unsupported exporter: {self.exporter}")
+            from dt3_sdk.errors import Dt3ConfigurationError
+
+            raise Dt3ConfigurationError(f"Unsupported exporter: {self.exporter}")
 
         if self._require_boolean(
             self.config.get("batching.enabled", False),
@@ -100,6 +120,7 @@ class LoggerImpl:
                 self._export_with_policy,
                 max_size=self.config.get("batching.max_size", 100),
                 flush_interval_ms=self.config.get("batching.flush_interval_ms", 5000),
+                on_error=self._handle_batching_error,
             )
 
     def _log(
@@ -148,6 +169,16 @@ class LoggerImpl:
         if error is not None:
             log_event["error.type"] = type(error).__name__
             log_event["error.message"] = str(error)
+            if isinstance(error, Dt3Error):
+                log_event["error.code"] = error.code.value
+                log_event["error.retryable"] = error.retryable
+            else:
+                code = getattr(error, "code", None)
+                if isinstance(code, str):
+                    log_event["error.code"] = code
+                retryable = getattr(error, "retryable", None)
+                if isinstance(retryable, bool):
+                    log_event["error.retryable"] = retryable
             if error.__traceback__ is not None:
                 log_event["error.stack"] = "".join(
                     traceback.format_exception(
@@ -159,7 +190,18 @@ class LoggerImpl:
 
         # The repository pipeline defines masking before validation, preventing
         # sensitive values from being exposed through validation handling.
-        masked_event, masked_fields = self.masking_engine.mask(log_event)
+        try:
+            masked_event, masked_fields = self.masking_engine.mask(log_event)
+        except RecursionError as masking_error:
+            handled_error = Dt3MaskingError(
+                "masking failed for the supplied context"
+            ).with_traceback(masking_error.__traceback__)
+            self.error_handler.handle(
+                handled_error,
+                phase=Dt3ErrorPhase.MASKING,
+                context={"exporter": self.exporter},
+            )
+            return
         if masked_fields:
             masked_event["dt3.security.masked_fields"] = masked_fields
 
@@ -169,7 +211,7 @@ class LoggerImpl:
         )
         if not validation_result.valid:
             if validation_result.mode == "STRICT":
-                raise ValidationError(
+                validation_error = ValidationError(
                     "Log event failed schema validation: "
                     + "; ".join(
                         (
@@ -179,6 +221,14 @@ class LoggerImpl:
                         for detail in validation_result.errors
                     )
                 )
+                # Strict validation is intentionally fail-closed regardless of
+                # delivery's fail_open setting, but is still observable.
+                self.error_handler.report(
+                    validation_error,
+                    phase=Dt3ErrorPhase.VALIDATION,
+                    context={"mode": "STRICT"},
+                )
+                raise validation_error
             if validation_result.mode == "LENIENT":
                 masked_event["dt3.validation.errors"] = [
                     detail.to_dict() for detail in validation_result.errors
@@ -202,15 +252,39 @@ class LoggerImpl:
 
     def _export_with_policy(self, event: Dict[str, Any]) -> None:
         """Deliver one final event under the configured delivery failure policy."""
-        self._deliver(lambda: self._export(event))
+        self._deliver(
+            lambda: self._export(event),
+            phase=Dt3ErrorPhase.DELIVERY,
+        )
 
-    def _deliver(self, operation: Callable[[], None]) -> None:
-        """Apply the configured delivery-only failure policy to one operation."""
+    def _deliver(
+        self,
+        operation: Callable[[], None],
+        *,
+        phase: Dt3ErrorPhase = Dt3ErrorPhase.DELIVERY,
+    ) -> None:
+        """Apply centralized classification and fail-open policy to an operation."""
+        self.error_handler.guard(
+            operation,
+            phase=phase,
+            context={"exporter": self.exporter},
+        )
+
+    def _handle_batching_error(
+        self,
+        error: BaseException,
+        phase: Dt3ErrorPhase,
+    ) -> None:
+        """Report timer and terminal batching failures without rethrowing."""
         try:
-            operation()
-        except (OSError, RuntimeError, TypeError, ValueError):
-            if not self.fail_open:
-                raise
+            self.error_handler.handle(
+                error,
+                phase=phase,
+                context={"exporter": self.exporter},
+            )
+        except BaseException:
+            # Timer-thread errors must never escape the batching thread.
+            pass
 
     def _config_value(
         self,
@@ -357,6 +431,11 @@ class LoggerImpl:
             self._deliver(self._http_transport.flush)
         elif self._otlp_transport is not None:
             self._deliver(self._otlp_transport.flush)
+
+    # PUBLIC_INTERFACE
+    def error_snapshot(self) -> Dict[str, int]:
+        """Return cumulative SDK-internal error counts keyed by DT3 error code."""
+        return self.error_handler.snapshot()
 
     # PUBLIC_INTERFACE
     def close(self) -> None:

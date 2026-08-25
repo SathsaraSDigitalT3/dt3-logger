@@ -9,9 +9,14 @@ from typing import Any, Mapping, Optional
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
+from .errors import Dt3ErrorCode, Dt3TransportError
 
-class OtlpTransportError(RuntimeError):
+
+class OtlpTransportError(Dt3TransportError):
     """Raised when the OTLP transport cannot successfully export an event."""
+
+    code = Dt3ErrorCode.TRANSPORT_UNAVAILABLE
+    retryable = True
 
 
 class OtlpTransport:
@@ -113,11 +118,15 @@ class OtlpTransport:
                     status = response.getcode()
                     if status < 200 or status >= 300:
                         raise OtlpTransportError(
-                            f"OTLP export failed with status {status}"
+                            f"OTLP export failed with status {status}",
+                            code=Dt3ErrorCode.TRANSPORT_REJECTED,
+                            retryable=status >= 500,
                         )
             except HTTPError as error:
                 raise OtlpTransportError(
-                    f"OTLP export failed with status {error.code}"
+                    f"OTLP export failed with status {error.code}",
+                    code=Dt3ErrorCode.TRANSPORT_REJECTED,
+                    retryable=error.code >= 500,
                 ) from error
             except URLError as error:
                 reason = str(getattr(error, "reason", "request failed"))
@@ -125,7 +134,11 @@ class OtlpTransport:
                     f"OTLP export request failed: {reason}"
                 ) from error
             except TimeoutError as error:
-                raise OtlpTransportError("OTLP export request timed out") from error
+                raise OtlpTransportError(
+                    "OTLP export request timed out",
+                    code=Dt3ErrorCode.TRANSPORT_TIMEOUT,
+                    retryable=True,
+                ) from error
 
     # PUBLIC_INTERFACE
     @classmethod

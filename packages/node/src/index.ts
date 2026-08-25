@@ -3,6 +3,8 @@ export * from './api/Timer';
 export * from './api/types';
 export * from './sdk/batching';
 export * from './sdk/context';
+export * from './sdk/ErrorHandler';
+export * from './sdk/errors';
 export * from './sdk/factory';
 export * from './sdk/HttpTransport';
 export * from './sdk/masking';

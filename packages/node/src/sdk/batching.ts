@@ -1,9 +1,15 @@
 import { LogEvent } from '../api/types';
+import { Dt3Error, Dt3ErrorCode, Dt3ErrorPhase } from './errors';
 
 /**
  * Callback used by EventBatcher to deliver one final canonical event.
  */
 export type EventDelivery = (event: LogEvent) => void;
+
+/**
+ * Callback used to observe timer and terminal batching failures.
+ */
+export type BatchingErrorObserver = (error: unknown) => void;
 
 /**
  * Buffer final canonical events and deliver them in insertion order.
@@ -14,6 +20,7 @@ export type EventDelivery = (event: LogEvent) => void;
  */
 export class EventBatcher {
   private readonly deliver: EventDelivery;
+  private readonly onError?: BatchingErrorObserver;
   private readonly maxSize: number;
   private readonly flushIntervalMs: number;
   private events: LogEvent[] = [];
@@ -29,7 +36,12 @@ export class EventBatcher {
    * @param flushIntervalMs - Maximum time a pending event remains buffered.
    * @throws Error when either batching limit is not a positive integer.
    */
-  constructor(deliver: EventDelivery, maxSize: number, flushIntervalMs: number) {
+  constructor(
+    deliver: EventDelivery,
+    maxSize: number,
+    flushIntervalMs: number,
+    onError?: BatchingErrorObserver,
+  ) {
     if (!Number.isInteger(maxSize) || maxSize <= 0) {
       throw new Error('batching.max_size must be a positive integer');
     }
@@ -38,6 +50,7 @@ export class EventBatcher {
     }
 
     this.deliver = deliver;
+    this.onError = onError;
     this.maxSize = maxSize;
     this.flushIntervalMs = flushIntervalMs;
   }
@@ -53,6 +66,13 @@ export class EventBatcher {
       throw new Error('Batcher is closed');
     }
     if (this.aborted) {
+      this.onError?.(
+        new Dt3Error('event discarded: batcher aborted after a fail-closed delivery failure', {
+          code: Dt3ErrorCode.BatchAborted,
+          retryable: false,
+          phase: Dt3ErrorPhase.Batching,
+        }),
+      );
       return;
     }
 
@@ -81,6 +101,13 @@ export class EventBatcher {
         this.deliver(event);
       } catch (error) {
         this.abort();
+        this.onError?.(
+          new Dt3Error('events discarded: batcher aborted after a fail-closed delivery failure', {
+            code: Dt3ErrorCode.BatchAborted,
+            retryable: false,
+            phase: Dt3ErrorPhase.Batching,
+          }),
+        );
         throw error;
       }
     }
@@ -124,9 +151,10 @@ export class EventBatcher {
 
       try {
         this.flush();
-      } catch {
+      } catch (error) {
         // A fail-closed error has already aborted the batcher. Timer callbacks
         // cannot surface synchronous exceptions to the original logger call.
+        this.onError?.(error);
       }
     }, this.flushIntervalMs);
   }

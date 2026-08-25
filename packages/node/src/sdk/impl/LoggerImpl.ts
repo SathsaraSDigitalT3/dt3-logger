@@ -1,10 +1,19 @@
 import { Logger } from '../../api/Logger';
 import { Timer, TimerContext } from '../../api/Timer';
 import { Headers, LogContext, LogEvent, Severity, ValidationMode } from '../../api/types';
+import { ErrorHandler, OnErrorCallback } from '../ErrorHandler';
 import { EventBatcher } from '../batching';
 import { FileTransport } from '../FileTransport';
 import { HttpTransport } from '../HttpTransport';
 import { ensureCorrelationId, getActiveLogContext, withLogContext } from '../context';
+import {
+  Dt3ConfigurationError,
+  Dt3Error,
+  Dt3ErrorCode,
+  Dt3ErrorPhase,
+  Dt3LifecycleError,
+  Dt3MaskingError,
+} from '../errors';
 import { MaskingEngine } from '../masking';
 import { OtlpTransport } from '../OtlpTransport';
 import { TimerImpl } from '../Timer';
@@ -17,6 +26,7 @@ export class LoggerImpl implements Logger {
   private readonly config: Record<string, unknown>;
   private readonly exporter: string;
   private readonly failOpen: boolean;
+  private readonly errorHandler: ErrorHandler;
   private readonly validationMode: ValidationMode;
   private readonly autoGenerateCorrelationId: boolean;
   private readonly maskingEngine: MaskingEngine;
@@ -25,6 +35,7 @@ export class LoggerImpl implements Logger {
   private readonly httpTransport?: HttpTransport;
   private readonly otlpTransport?: OtlpTransport;
   private readonly batcher?: EventBatcher;
+  private readonly observedAsyncDeliveryFailures = new WeakSet<object>();
   private closed = false;
 
   /**
@@ -36,6 +47,23 @@ export class LoggerImpl implements Logger {
     this.config = config;
     this.exporter = typeof config.exporter === 'string' ? config.exporter : 'stdout';
     this.failOpen = this.requireBoolean(config.fail_open ?? true, 'fail_open');
+    this.errorHandler = new ErrorHandler({
+      failOpen: this.failOpen,
+      diagnosticsEnabled: config['error.diagnostics.enabled'] !== false,
+      includeStack: config['error.include_stack'] === true,
+      rateLimitPerMinute:
+        config['error.rate_limit_per_minute'] === undefined
+          ? undefined
+          : (config['error.rate_limit_per_minute'] as number),
+      onError:
+        typeof config['error.on_error'] === 'function'
+          ? (config['error.on_error'] as OnErrorCallback)
+          : undefined,
+    });
+    if (!['stdout', 'file', 'http', 'otlp'].includes(this.exporter)) {
+      throw new Dt3ConfigurationError(`Unsupported exporter: ${this.exporter}`);
+    }
+
     this.fileTransport =
       this.exporter === 'file'
         ? new FileTransport(
@@ -50,6 +78,8 @@ export class LoggerImpl implements Logger {
               : '',
             this.resolveHttpTimeout(config),
             this.resolveHeaders(config['exporter.http.headers'], 'exporter.http.headers'),
+            (error) => this.observeAsyncDeliveryFailure(error),
+            !this.failOpen,
           )
         : undefined;
     this.otlpTransport =
@@ -58,6 +88,8 @@ export class LoggerImpl implements Logger {
             typeof config['otlp.endpoint'] === 'string' ? config['otlp.endpoint'] : '',
             typeof config['otlp.timeout'] === 'number' ? config['otlp.timeout'] : 10000,
             this.resolveHeaders(config['otlp.headers'], 'otlp.headers'),
+            (error) => this.observeAsyncDeliveryFailure(error),
+            !this.failOpen,
           )
         : undefined;
     this.validationMode = this.resolveValidationMode(config['validation.mode']);
@@ -90,6 +122,7 @@ export class LoggerImpl implements Logger {
         (event) => this.exportWithPolicy(event),
         maxSize,
         flushIntervalMs,
+        (error) => this.reportBatchingFailure(error),
       );
     }
   }
@@ -161,7 +194,9 @@ export class LoggerImpl implements Logger {
 
   private ensureOpen(): void {
     if (this.closed) {
-      throw new Error('Logger is closed');
+      const error = new Dt3LifecycleError('Logger is closed');
+      this.errorHandler.report(error, Dt3ErrorPhase.Lifecycle, { exporter: this.exporter });
+      throw error;
     }
   }
 
@@ -177,15 +212,45 @@ export class LoggerImpl implements Logger {
 
   private requireBoolean(value: unknown, key: string): boolean {
     if (typeof value !== 'boolean') {
-      throw new Error(`${key} must be a boolean`);
+      throw new Dt3ConfigurationError(`${key} must be a boolean`);
     }
     return value;
   }
 
   private handleDeliveryFailure(error: unknown): void {
-    if (!this.failOpen) {
-      throw error;
+    if (this.wasAsyncDeliveryFailureObserved(error)) {
+      // The transport observer has already emitted diagnostics, invoked the
+      // callback, and incremented the snapshot. Retain fail-closed behavior
+      // by surfacing the original rejection from flush without reporting it
+      // a second time.
+      if (!this.failOpen) {
+        throw error;
+      }
+      return;
     }
+
+    this.errorHandler.handle(error, Dt3ErrorPhase.Delivery, { exporter: this.exporter });
+  }
+
+  private observeAsyncDeliveryFailure(error: unknown): void {
+    // Rejection observers cannot safely throw. `flush()` remains responsible
+    // for surfacing fail-closed transport failures to application code.
+    if (this.isWeaklyReferenceable(error)) {
+      this.observedAsyncDeliveryFailures.add(error);
+    }
+    this.errorHandler.report(error, Dt3ErrorPhase.Delivery, { exporter: this.exporter });
+  }
+
+  private wasAsyncDeliveryFailureObserved(error: unknown): boolean {
+    return this.isWeaklyReferenceable(error) && this.observedAsyncDeliveryFailures.has(error);
+  }
+
+  private isWeaklyReferenceable(value: unknown): value is object {
+    return (typeof value === 'object' && value !== null) || typeof value === 'function';
+  }
+
+  private reportBatchingFailure(error: unknown): void {
+    this.errorHandler.report(error, Dt3ErrorPhase.Batching, { exporter: this.exporter });
   }
 
   private export(event: LogEvent): void {
@@ -201,11 +266,9 @@ export class LoggerImpl implements Logger {
   }
 
   private exportWithPolicy(event: LogEvent): void {
-    try {
-      this.export(event);
-    } catch (deliveryError) {
-      this.handleDeliveryFailure(deliveryError);
-    }
+    this.errorHandler.guard(() => this.export(event), Dt3ErrorPhase.Delivery, {
+      exporter: this.exporter,
+    });
   }
 
   private log(
@@ -249,19 +312,51 @@ export class LoggerImpl implements Logger {
       logEvent['error.type'] = error.name;
       logEvent['error.message'] = error.message;
       logEvent['error.stack'] = error.stack;
+      if (error instanceof Dt3Error) {
+        logEvent['error.code'] = error.code;
+        logEvent['error.retryable'] = error.retryable;
+      } else {
+        const metadata = error as Error & { code?: unknown; retryable?: unknown };
+        if (typeof metadata.code === 'string') {
+          logEvent['error.code'] = metadata.code;
+        }
+        if (typeof metadata.retryable === 'boolean') {
+          logEvent['error.retryable'] = metadata.retryable;
+        }
+      }
     }
 
-    const maskedResult = this.maskingEngine.mask(logEvent);
-    const maskedEvent = maskedResult.data;
+    let maskedEvent: Record<string, unknown>;
+    let maskedFields: string[];
+    try {
+      const maskedResult = this.maskingEngine.mask(logEvent);
+      maskedEvent = maskedResult.data;
+      maskedFields = maskedResult.maskedFields;
+    } catch (maskingError) {
+      const handledError = new Dt3MaskingError('masking failed for the supplied context', maskingError);
+      this.errorHandler.handle(handledError, Dt3ErrorPhase.Masking, { exporter: this.exporter });
+      return;
+    }
 
-    if (maskedResult.maskedFields.length > 0) {
-      maskedEvent['dt3.security.masked_fields'] = maskedResult.maskedFields;
+    if (maskedFields.length > 0) {
+      maskedEvent['dt3.security.masked_fields'] = maskedFields;
     }
 
     const validationResult = this.validator.validate(maskedEvent, this.validationMode);
     if (!validationResult.valid) {
       if (validationResult.mode === ValidationMode.STRICT) {
-        throw new ValidationError(validationResult.errors);
+        const validationError = new ValidationError(validationResult.errors);
+        this.errorHandler.report(
+          new Dt3Error(validationError.message, {
+            code: Dt3ErrorCode.ValidationFailed,
+            retryable: false,
+            phase: Dt3ErrorPhase.Validation,
+            cause: validationError,
+          }),
+          Dt3ErrorPhase.Validation,
+          { mode: 'STRICT' },
+        );
+        throw validationError;
       }
 
       if (validationResult.mode === ValidationMode.LENIENT) {
@@ -332,6 +427,16 @@ export class LoggerImpl implements Logger {
    */
   public error(message: string, error?: Error, context?: Record<string, unknown>): void {
     this.log('ERROR', message, context, error);
+  }
+
+  // PUBLIC_INTERFACE
+  /**
+   * Return cumulative SDK-internal error counts by canonical DT3 error code.
+   *
+   * @returns A snapshot of handled-error counts since logger construction.
+   */
+  public errorSnapshot(): Record<string, number> {
+    return this.errorHandler.snapshot();
   }
 
   // PUBLIC_INTERFACE

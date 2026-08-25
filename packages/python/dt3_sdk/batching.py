@@ -6,6 +6,8 @@ import threading
 from collections.abc import Callable, Mapping
 from typing import Any
 
+from .errors import Dt3Error, Dt3ErrorCode, Dt3ErrorPhase
+
 
 class EventBatcher:
     """Buffer final events and deliver them in order using an event callback."""
@@ -16,6 +18,7 @@ class EventBatcher:
         *,
         max_size: int,
         flush_interval_ms: int,
+        on_error: Callable[[BaseException, Dt3ErrorPhase], None] | None = None,
     ) -> None:
         """Initialize a batching buffer.
 
@@ -46,6 +49,7 @@ class EventBatcher:
         self._closed = False
         self._aborted = False
         self._timer: threading.Timer | None = None
+        self._on_error = on_error
 
     # PUBLIC_INTERFACE
     def add(self, event: Mapping[str, Any]) -> None:
@@ -65,6 +69,14 @@ class EventBatcher:
         with self._lock:
             if self._closed:
                 raise RuntimeError("Batcher is closed")
+            if self._aborted:
+                self._report_discarded_events(1)
+                raise Dt3Error(
+                    "event rejected: batcher aborted after a fail-closed "
+                    "delivery failure",
+                    code=Dt3ErrorCode.BATCH_ABORTED,
+                    phase=Dt3ErrorPhase.BATCHING,
+                )
             self._events.append(dict(event))
             self._schedule_flush_locked()
             should_flush = len(self._events) >= self._max_size
@@ -92,9 +104,10 @@ class EventBatcher:
         for index, event in enumerate(pending_events):
             try:
                 self._deliver(event)
-            except Exception:
-                self._abort_after_delivery_failure()
-                raise
+            except Exception as delivery_error:
+                discarded_count = len(pending_events) - index
+                self._abort_after_delivery_failure(discarded_count)
+                raise delivery_error
 
     # PUBLIC_INTERFACE
     def close(self) -> None:
@@ -117,15 +130,13 @@ class EventBatcher:
         if not pending_events:
             return
 
-        for event in pending_events:
+        for index, event in enumerate(pending_events):
             try:
                 self._deliver(event)
-            except Exception:
-                # The logger applies fail-open/fail-closed policy at delivery
-                # time. A closed batcher cannot safely retain events for retry,
-                # and retrying here could duplicate delivery with ambiguous
-                # transports, so remaining events are not replayed.
-                raise
+            except Exception as delivery_error:
+                discarded_count = len(pending_events) - index
+                self._abort_after_delivery_failure(discarded_count)
+                raise delivery_error
 
     def _schedule_flush_locked(self) -> None:
         """Schedule interval delivery only when final events are buffered."""
@@ -146,10 +157,12 @@ class EventBatcher:
 
         try:
             self.flush()
-        except Exception:
+        except Exception as flush_error:
             # The logger's configured delivery policy is applied by its callback.
             # Fail-closed failures abort the batcher; fail-open callbacks do not
             # raise, so their normal delivery lifecycle continues.
+            if self._on_error is not None:
+                self._on_error(flush_error, Dt3ErrorPhase.BATCHING)
             return
 
     def _take_events_locked(self) -> list[dict[str, Any]]:
@@ -161,7 +174,7 @@ class EventBatcher:
         self._events = []
         return pending_events
 
-    def _abort_after_delivery_failure(self) -> None:
+    def _abort_after_delivery_failure(self, discarded_count: int) -> None:
         """Discard pending work after a fail-closed delivery exception.
 
         The logger callback raises only when the configured fail-closed policy
@@ -173,6 +186,22 @@ class EventBatcher:
             self._aborted = True
             self._events = []
             self._cancel_timer_locked()
+        self._report_discarded_events(discarded_count)
+
+    def _report_discarded_events(self, discarded_count: int) -> None:
+        """Report events discarded by the terminal fail-closed batch lifecycle."""
+        if self._on_error is None:
+            return
+        self._on_error(
+            Dt3Error(
+                "events discarded: batcher aborted after a fail-closed "
+                f"delivery failure (count={discarded_count})",
+                code=Dt3ErrorCode.BATCH_ABORTED,
+                phase=Dt3ErrorPhase.BATCHING,
+                details={"discarded_count": discarded_count},
+            ),
+            Dt3ErrorPhase.BATCHING,
+        )
 
     def _cancel_timer_locked(self) -> None:
         """Cancel the currently scheduled timer, if any."""

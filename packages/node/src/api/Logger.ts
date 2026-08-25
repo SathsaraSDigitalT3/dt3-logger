@@ -59,6 +59,16 @@ export interface Logger {
    */
   flush(): Promise<void>;
 
+  // PUBLIC_INTERFACE
+  /**
+   * Optionally return cumulative SDK-internal error counts by canonical DT3
+   * error code. Concrete SDK loggers provide this diagnostic capability, but
+   * custom Logger implementations are not required to implement it.
+   *
+   * @returns A snapshot of handled-error counts since logger construction.
+   */
+  errorSnapshot?: () => Record<string, number>;
+
   /**
    * Close the logger and prevent future logging or flush operations.
    *
