@@ -2,19 +2,29 @@ import { request } from 'node:http';
 import { request as requestSecurely } from 'node:https';
 
 import { Headers, LogEvent } from '../api/types';
+import { Dt3ErrorCode, Dt3TransportError } from './errors';
 
 /**
  * Raised when an HTTP export cannot complete successfully.
  */
-export class HttpTransportError extends Error {
+export class HttpTransportError extends Dt3TransportError {
   /**
    * Create an HTTP export error.
    *
    * @param message - A sanitized description of the transport failure.
+   * @param options - Specific canonical transport classification.
    */
-  constructor(message: string) {
-    super(message);
+  constructor(
+    message: string,
+    options: {
+      code?: Dt3ErrorCode;
+      retryable?: boolean;
+      cause?: unknown;
+    } = {},
+  ) {
+    super(message, options);
     this.name = 'HttpTransportError';
+    Object.setPrototypeOf(this, new.target.prototype);
   }
 }
 
@@ -29,6 +39,9 @@ export class HttpTransport {
   private readonly timeoutMs: number;
   private readonly headers: Headers;
   private readonly inFlight = new Set<Promise<void>>();
+  private readonly failedDeliveries = new Map<Promise<void>, unknown>();
+  private readonly onDeliveryFailure?: (error: unknown) => void;
+  private readonly retainFailedDeliveries: boolean;
   private closed = false;
 
   /**
@@ -37,9 +50,18 @@ export class HttpTransport {
    * @param endpoint - Destination URL that receives JSON log events.
    * @param timeoutMs - Maximum request duration in milliseconds.
    * @param headers - Optional request headers merged with the JSON content type.
+   * @param onDeliveryFailure - Optional out-of-band async failure observer.
+   * @param retainFailedDeliveries - Whether failures must be retained for a
+   * later fail-closed `flush()` boundary.
    * @throws Error if the endpoint, timeout, or headers are invalid.
    */
-  constructor(endpoint: string, timeoutMs = 5000, headers?: Headers) {
+  constructor(
+    endpoint: string,
+    timeoutMs = 5000,
+    headers?: Headers,
+    onDeliveryFailure?: (error: unknown) => void,
+    retainFailedDeliveries = true,
+  ) {
     if (typeof endpoint !== 'string' || endpoint.trim().length === 0) {
       throw new Error('exporter.http.endpoint must be configured for the HTTP exporter');
     }
@@ -62,6 +84,8 @@ export class HttpTransport {
 
     this.timeoutMs = timeoutMs;
     this.headers = { ...(headers ?? {}) };
+    this.onDeliveryFailure = onDeliveryFailure;
+    this.retainFailedDeliveries = retainFailedDeliveries;
   }
 
   /**
@@ -72,7 +96,10 @@ export class HttpTransport {
    */
   public export(event: LogEvent): void {
     if (this.closed) {
-      throw new HttpTransportError('HTTP transport is closed');
+      throw new HttpTransportError('HTTP transport is closed', {
+        code: Dt3ErrorCode.TransportClosed,
+        retryable: false,
+      });
     }
 
     const payload = JSON.stringify(event);
@@ -88,6 +115,22 @@ export class HttpTransport {
       rejectDelivery = reject;
     });
     this.inFlight.add(delivery);
+
+    // A fail-closed logger needs a settled rejection available to a later
+    // flush boundary. Fail-open delivery failures are reported immediately,
+    // then released so a long-lived logger cannot retain failed requests.
+    void delivery
+      .catch((deliveryError: unknown) => {
+        if (this.retainFailedDeliveries) {
+          this.failedDeliveries.set(delivery, deliveryError);
+        }
+        try {
+          this.onDeliveryFailure?.(deliveryError);
+        } catch {
+          // An observer must never turn an async delivery error into an
+          // unhandled rejection or recursively enter the logger.
+        }
+      });
     void delivery.finally(() => this.inFlight.delete(delivery)).catch(() => undefined);
 
     try {
@@ -104,7 +147,10 @@ export class HttpTransport {
 
           if (response.statusCode === undefined || response.statusCode < 200 || response.statusCode >= 300) {
             rejectDelivery(
-              new HttpTransportError(`HTTP export failed with status ${response.statusCode ?? 'unknown'}`),
+              new HttpTransportError(`HTTP export failed with status ${response.statusCode ?? 'unknown'}`, {
+                code: Dt3ErrorCode.TransportRejected,
+                retryable: (response.statusCode ?? 0) >= 500,
+              }),
             );
             return;
           }
@@ -114,24 +160,39 @@ export class HttpTransport {
       );
 
       outgoingRequest.once('timeout', () => {
-        outgoingRequest.destroy(new HttpTransportError('HTTP export request timed out'));
+        outgoingRequest.destroy(
+          new HttpTransportError('HTTP export request timed out', {
+            code: Dt3ErrorCode.TransportTimeout,
+            retryable: true,
+          }),
+        );
       });
       outgoingRequest.once('error', (error: Error) => {
         rejectDelivery(
           error instanceof HttpTransportError
             ? error
-            : new HttpTransportError('HTTP export request failed'),
+            : new HttpTransportError('HTTP export request failed', {
+                code: Dt3ErrorCode.TransportUnavailable,
+                retryable: true,
+                cause: error,
+              }),
         );
       });
       outgoingRequest.write(payload, 'utf8');
       outgoingRequest.end();
     } catch {
-      rejectDelivery(new HttpTransportError('HTTP export request could not be initiated'));
+      rejectDelivery(
+        new HttpTransportError('HTTP export request could not be initiated', {
+          code: Dt3ErrorCode.TransportUnavailable,
+          retryable: true,
+        }),
+      );
     }
   }
 
   /**
-   * Settle requests started before this flush boundary.
+   * Settle requests started before this flush boundary and consume previously
+   * settled delivery failures that have not yet been observed by a flush.
    *
    * @returns A promise that resolves when captured requests succeed or rejects
    * with the first sanitized delivery failure.
@@ -139,11 +200,15 @@ export class HttpTransport {
    */
   public async flush(): Promise<void> {
     if (this.closed) {
-      throw new HttpTransportError('HTTP transport is closed');
+      throw new HttpTransportError('HTTP transport is closed', {
+        code: Dt3ErrorCode.TransportClosed,
+        retryable: false,
+      });
     }
 
     const pending = [...this.inFlight];
-    if (pending.length === 0) {
+    const retainedFailures = [...this.failedDeliveries.entries()];
+    if (pending.length === 0 && retainedFailures.length === 0) {
       return;
     }
 
@@ -151,6 +216,20 @@ export class HttpTransport {
     const failure = results.find(
       (result): result is PromiseRejectedResult => result.status === 'rejected',
     );
+    const retainedFailure = retainedFailures[0]?.[1];
+
+    // Every request captured at this boundary, including one that rejected
+    // while awaiting `allSettled`, has now been observed by this flush.
+    for (const [delivery] of retainedFailures) {
+      this.failedDeliveries.delete(delivery);
+    }
+    for (const delivery of pending) {
+      this.failedDeliveries.delete(delivery);
+    }
+
+    if (retainedFailure !== undefined) {
+      throw retainedFailure;
+    }
     if (failure) {
       throw failure.reason;
     }

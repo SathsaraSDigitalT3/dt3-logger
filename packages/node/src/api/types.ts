@@ -197,6 +197,18 @@ export interface SdkConfig {
   /** When true, exporter/transport failures are swallowed. Defaults to `true`. */
   fail_open?: boolean;
 
+  /** Whether SDK-internal failure diagnostics write to stderr. Defaults to `true`. */
+  'error.diagnostics.enabled'?: boolean;
+
+  /** Whether SDK diagnostics include a stack trace. Defaults to `false`. */
+  'error.include_stack'?: boolean;
+
+  /** Maximum diagnostics emitted per error code per minute. Defaults to `20`. */
+  'error.rate_limit_per_minute'?: number;
+
+  /** Optional callback invoked for each handled SDK-internal error report. */
+  'error.on_error'?: (report: unknown) => void;
+
   /** Exporter backend: `'stdout'`, `'file'`, `'http'`, `'otlp'`. Defaults to `'stdout'`. */
   exporter?: string;
 

@@ -8,9 +8,14 @@ from typing import Any, Mapping, Optional
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
+from .errors import Dt3ErrorCode, Dt3TransportError
 
-class HttpTransportError(RuntimeError):
+
+class HttpTransportError(Dt3TransportError):
     """Raised when the HTTP transport cannot successfully export an event."""
+
+    code = Dt3ErrorCode.TRANSPORT_UNAVAILABLE
+    retryable = True
 
 
 class HttpTransport:
@@ -104,11 +109,15 @@ class HttpTransport:
                     status = response.getcode()
                     if status < 200 or status >= 300:
                         raise HttpTransportError(
-                            f"HTTP export failed with status {status}"
+                            f"HTTP export failed with status {status}",
+                            code=Dt3ErrorCode.TRANSPORT_REJECTED,
+                            retryable=status >= 500,
                         )
             except HTTPError as error:
                 raise HttpTransportError(
-                    f"HTTP export failed with status {error.code}"
+                    f"HTTP export failed with status {error.code}",
+                    code=Dt3ErrorCode.TRANSPORT_REJECTED,
+                    retryable=error.code >= 500,
                 ) from error
             except URLError as error:
                 reason = "request failed"
@@ -118,7 +127,11 @@ class HttpTransport:
                     f"HTTP export request failed: {reason}"
                 ) from error
             except TimeoutError as error:
-                raise HttpTransportError("HTTP export request timed out") from error
+                raise HttpTransportError(
+                    "HTTP export request timed out",
+                    code=Dt3ErrorCode.TRANSPORT_TIMEOUT,
+                    retryable=True,
+                ) from error
 
     # PUBLIC_INTERFACE
     def flush(self) -> None:

@@ -11,6 +11,8 @@ from typing import Any, Dict, List, Mapping
 
 from jsonschema import Draft202012Validator, FormatChecker
 
+from .errors import Dt3Error, Dt3ErrorCode, Dt3ErrorPhase
+
 
 _FORMAT_CHECKER = FormatChecker()
 
@@ -35,8 +37,12 @@ def _is_rfc3339_date_time(value: object) -> bool:
     return parsed_value.tzinfo is not None
 
 
-class ValidationError(ValueError):
+class ValidationError(Dt3Error, ValueError):
     """Raised when a log event fails validation in STRICT mode."""
+
+    code = Dt3ErrorCode.VALIDATION_FAILED
+    retryable = False
+    phase = Dt3ErrorPhase.VALIDATION
 
 
 @dataclass(frozen=True)

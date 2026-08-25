@@ -10,6 +10,7 @@ from typing import Any
 
 import pytest
 from dt3_sdk import create_logger, logger_context
+from dt3_sdk.errors import Dt3Error, Dt3ErrorCode
 from dt3_sdk.http_transport import HttpTransportError
 
 
@@ -305,10 +306,11 @@ def test_batch_delivery_failures_follow_fail_open_policy(
     logger.close()
 
 
-def test_fail_closed_batch_failure_aborts_future_flushes_and_logging(
+def test_fail_closed_batch_failure_reports_discarded_events_and_rejects_later_logs(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A fail-closed batch failure must make later flushes and logging inert."""
+    """A terminal batch abort must expose loss and reject subsequent logging."""
+    reports: list[Any] = []
     logger = create_logger(
         _config(
             exporter="http",
@@ -316,6 +318,7 @@ def test_fail_closed_batch_failure_aborts_future_flushes_and_logging(
             **{
                 "exporter.http.endpoint": "https://logs.example.test/events",
                 "batching.max_size": 3,
+                "error.on_error": reports.append,
             },
         )
     )
@@ -337,13 +340,25 @@ def test_fail_closed_batch_failure_aborts_future_flushes_and_logging(
         logger.info("Third", {"event.name": "THIRD_EVENT"})
 
     # An aborted batcher must not retry failed or unattempted events when a
-    # caller explicitly flushes, and later logging is intentionally discarded.
+    # caller explicitly flushes. Subsequent logging is explicitly rejected.
     logger.flush()
-    logger.info("After abort", {"event.name": "AFTER_ABORT_EVENT"})
+    with pytest.raises(Dt3Error, match="batcher aborted"):
+        logger.info("After abort", {"event.name": "AFTER_ABORT_EVENT"})
     logger.flush()
     logger.close()
 
     assert attempts == ["FIRST_EVENT", "SECOND_EVENT"]
+    assert logger.error_snapshot() == {
+        "DT3_TRANSPORT_UNAVAILABLE": 1,
+        "DT3_BATCH_ABORTED": 2,
+    }
+    assert [report.code for report in reports] == [
+        Dt3ErrorCode.TRANSPORT_UNAVAILABLE,
+        Dt3ErrorCode.BATCH_ABORTED,
+        Dt3ErrorCode.BATCH_ABORTED,
+    ]
+    assert reports[1].error.details["discarded_count"] == 2
+    assert reports[2].error.details["discarded_count"] == 1
 
 
 @pytest.mark.parametrize(

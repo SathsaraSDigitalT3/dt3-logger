@@ -2,19 +2,28 @@ import { request } from 'node:http';
 import { request as requestSecurely } from 'node:https';
 
 import { Headers, LogEvent } from '../api/types';
+import { Dt3ErrorCode, Dt3TransportError } from './errors';
 
 /**
  * Raised when an OTLP export cannot be initiated successfully.
  */
-export class OtlpTransportError extends Error {
+export class OtlpTransportError extends Dt3TransportError {
   /**
    * Create an OTLP export error with a sanitized failure description.
    *
    * @param message - Safe transport failure description that never includes event data.
    */
-  constructor(message: string) {
-    super(message);
+  constructor(
+    message: string,
+    options: {
+      code?: Dt3ErrorCode;
+      retryable?: boolean;
+      cause?: unknown;
+    } = {},
+  ) {
+    super(message, options);
     this.name = 'OtlpTransportError';
+    Object.setPrototypeOf(this, new.target.prototype);
   }
 }
 
@@ -40,6 +49,9 @@ export class OtlpTransport {
   private readonly timeoutMs: number;
   private readonly headers: Headers;
   private readonly inFlight = new Set<Promise<void>>();
+  private readonly failedDeliveries = new Map<Promise<void>, unknown>();
+  private readonly onDeliveryFailure?: (error: unknown) => void;
+  private readonly retainFailedDeliveries: boolean;
   private closed = false;
 
   /**
@@ -48,9 +60,18 @@ export class OtlpTransport {
    * @param endpoint - OTLP Logs endpoint, conventionally ending in `/v1/logs`.
    * @param timeoutMs - Maximum request duration in milliseconds.
    * @param headers - Optional request headers merged with the OTLP JSON content type.
+   * @param onDeliveryFailure - Optional out-of-band async failure observer.
+   * @param retainFailedDeliveries - Whether failures must be retained for a
+   * later fail-closed `flush()` boundary.
    * @throws Error if endpoint, timeout, or headers are invalid.
    */
-  constructor(endpoint: string, timeoutMs = 10000, headers?: Headers) {
+  constructor(
+    endpoint: string,
+    timeoutMs = 10000,
+    headers?: Headers,
+    onDeliveryFailure?: (error: unknown) => void,
+    retainFailedDeliveries = true,
+  ) {
     if (typeof endpoint !== 'string' || endpoint.trim().length === 0) {
       throw new Error('otlp.endpoint must be configured for the OTLP exporter');
     }
@@ -73,6 +94,8 @@ export class OtlpTransport {
 
     this.timeoutMs = timeoutMs;
     this.headers = { ...(headers ?? {}) };
+    this.onDeliveryFailure = onDeliveryFailure;
+    this.retainFailedDeliveries = retainFailedDeliveries;
   }
 
   /**
@@ -83,7 +106,10 @@ export class OtlpTransport {
    */
   public export(event: LogEvent): void {
     if (this.closed) {
-      throw new OtlpTransportError('OTLP transport is closed');
+      throw new OtlpTransportError('OTLP transport is closed', {
+        code: Dt3ErrorCode.TransportClosed,
+        retryable: false,
+      });
     }
 
     const payload = JSON.stringify(OtlpTransport.toOtlpPayload(event));
@@ -100,6 +126,21 @@ export class OtlpTransport {
       rejectDelivery = reject;
     });
     this.inFlight.add(delivery);
+
+    // A fail-closed logger needs a settled rejection available to a later
+    // flush boundary. Fail-open delivery failures are reported immediately,
+    // then released so a long-lived logger cannot retain failed requests.
+    void delivery
+      .catch((deliveryError: unknown) => {
+        if (this.retainFailedDeliveries) {
+          this.failedDeliveries.set(delivery, deliveryError);
+        }
+        try {
+          this.onDeliveryFailure?.(deliveryError);
+        } catch {
+          // The observer must never create an unhandled rejection.
+        }
+      });
     void delivery.finally(() => this.inFlight.delete(delivery)).catch(() => undefined);
 
     try {
@@ -116,7 +157,10 @@ export class OtlpTransport {
 
           if (response.statusCode === undefined || response.statusCode < 200 || response.statusCode >= 300) {
             rejectDelivery(
-              new OtlpTransportError(`OTLP export failed with status ${response.statusCode ?? 'unknown'}`),
+              new OtlpTransportError(`OTLP export failed with status ${response.statusCode ?? 'unknown'}`, {
+                code: Dt3ErrorCode.TransportRejected,
+                retryable: (response.statusCode ?? 0) >= 500,
+              }),
             );
             return;
           }
@@ -126,36 +170,55 @@ export class OtlpTransport {
       );
 
       outgoingRequest.once('timeout', () => {
-        outgoingRequest.destroy(new OtlpTransportError('OTLP export request timed out'));
+        outgoingRequest.destroy(
+          new OtlpTransportError('OTLP export request timed out', {
+            code: Dt3ErrorCode.TransportTimeout,
+            retryable: true,
+          }),
+        );
       });
       outgoingRequest.once('error', (error: Error) => {
         // Transport errors intentionally omit the event payload to avoid exposing data.
         rejectDelivery(
           error instanceof OtlpTransportError
             ? error
-            : new OtlpTransportError('OTLP export request failed'),
+            : new OtlpTransportError('OTLP export request failed', {
+                code: Dt3ErrorCode.TransportUnavailable,
+                retryable: true,
+                cause: error,
+              }),
         );
       });
       outgoingRequest.write(payload, 'utf8');
       outgoingRequest.end();
     } catch {
-      rejectDelivery(new OtlpTransportError('OTLP export request could not be initiated'));
+      rejectDelivery(
+        new OtlpTransportError('OTLP export request could not be initiated', {
+          code: Dt3ErrorCode.TransportUnavailable,
+          retryable: true,
+        }),
+      );
     }
   }
 
   /**
-   * Wait for OTLP requests that were in flight when this method was called.
+   * Wait for OTLP requests that were in flight when this method was called
+   * and consume previously settled failures not yet observed by a flush.
    *
    * @returns A promise resolving after all captured requests settle, rejecting
    * with the first sanitized delivery failure.
    */
   public async flush(): Promise<void> {
     if (this.closed) {
-      throw new OtlpTransportError('OTLP transport is closed');
+      throw new OtlpTransportError('OTLP transport is closed', {
+        code: Dt3ErrorCode.TransportClosed,
+        retryable: false,
+      });
     }
 
     const pending = [...this.inFlight];
-    if (pending.length === 0) {
+    const retainedFailures = [...this.failedDeliveries.entries()];
+    if (pending.length === 0 && retainedFailures.length === 0) {
       return;
     }
 
@@ -163,6 +226,20 @@ export class OtlpTransport {
     const failure = results.find(
       (result): result is PromiseRejectedResult => result.status === 'rejected',
     );
+    const retainedFailure = retainedFailures[0]?.[1];
+
+    // Every request captured at this boundary, including one that rejected
+    // while awaiting `allSettled`, has now been observed by this flush.
+    for (const [delivery] of retainedFailures) {
+      this.failedDeliveries.delete(delivery);
+    }
+    for (const delivery of pending) {
+      this.failedDeliveries.delete(delivery);
+    }
+
+    if (retainedFailure !== undefined) {
+      throw retainedFailure;
+    }
     if (failure) {
       throw failure.reason;
     }
