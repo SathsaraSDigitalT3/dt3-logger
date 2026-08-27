@@ -34,19 +34,14 @@
   </dependencies>
 
   <build>
+    <!--
+      Canonical schema is packaged from src/main/resources/schemas/log-event.schema.json
+      (same pattern as Node's embedded schema). Keep it in sync with
+      ../../schemas/log-event.schema.json — CanonicalSchemaSyncTest enforces this in the monorepo.
+    -->
     <resources>
       <resource>
         <directory>src/main/resources</directory>
-        <excludes>
-          <exclude>schemas/log-event.schema.json</exclude>
-        </excludes>
-      </resource>
-      <resource>
-        <directory>${project.basedir}/../../schemas</directory>
-        <includes>
-          <include>log-event.schema.json</include>
-        </includes>
-        <targetPath>schemas</targetPath>
       </resource>
     </resources>
     <plugins>

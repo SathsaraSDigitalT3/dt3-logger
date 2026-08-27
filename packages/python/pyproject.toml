@@ -20,7 +20,10 @@ dev = [
 ]
 
 [tool.setuptools]
-packages = ["dt3_api", "dt3_sdk", "dt3_sdk.impl"]
+packages = ["dt3_api", "dt3_sdk", "dt3_sdk.impl", "dt3_sdk.events"]
+
+[tool.setuptools.package-data]
+dt3_sdk = ["log-event.schema.json"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
