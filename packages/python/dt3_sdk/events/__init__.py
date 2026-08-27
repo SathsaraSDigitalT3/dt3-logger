@@ -3,6 +3,8 @@
 from .ai import (
     build_agent_execution,
     build_ai_event,
+    build_ai_request_event,
+    build_ai_response_event,
     build_memory_retrieval,
     build_prompt_submitted,
     build_rag_retrieval,
@@ -32,6 +34,8 @@ __all__ = [
     "build_ai_memory_retrieval",
     "build_ai_prompt_submitted",
     "build_ai_rag_retrieval",
+    "build_ai_request_event",
+    "build_ai_response_event",
     "build_ai_response_received",
     "build_ai_safety_filter_applied",
     "build_ai_tool_invocation",

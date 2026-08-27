@@ -1,4 +1,13 @@
-import { createLogger, EventEmitter, MaskingEngine, buildApiEvent, buildAiEvent } from '../src';
+import {
+  createLogger,
+  EventEmitter,
+  MaskingEngine,
+  buildApiEvent,
+  buildAiEvent,
+  buildAiRequestEvent,
+  buildAiResponseEvent,
+} from '../src';
+import { createServer } from 'node:http';
 import { EventSink } from '../src/api/EventSink';
 import { LogEvent } from '../src/api/types';
 
@@ -139,5 +148,81 @@ describe('structured event framework', () => {
     expect(inside?.['parent.span.id']).toMatch(/^[a-f0-9]{16}$/);
     logSpy.mockRestore();
     logger.close();
+  });
+
+  it('auto-generates trace.id and span.id on every event', () => {
+    const sink = new CapturingSink();
+    const logSpy = jest.spyOn(console, 'log').mockImplementation(() => undefined);
+    const logger = createLogger(baseConfig({ sinks: [sink] }));
+    logger.info('traced', { 'event.name': 'AUTO_TRACE' });
+    expect(sink.events[0]['trace.id']).toMatch(/^[a-f0-9]{32}$/);
+    expect(sink.events[0]['span.id']).toMatch(/^[a-f0-9]{16}$/);
+    logSpy.mockRestore();
+    logger.close();
+  });
+
+  it('builds correlated AI request and response events', () => {
+    const request = buildAiRequestEvent({
+      message: 'ask',
+      'kavia.request.id': 'req-1',
+      'kavia.prompt': 'hi',
+      'kavia.model': 'gpt-4o',
+    });
+    const response = buildAiResponseEvent({
+      'kavia.request.id': 'req-1',
+      'kavia.tokens.total': 5,
+      'kavia.finish_reason': 'stop',
+    });
+    expect(request['event.name']).toBe('AI_PROMPT_SUBMITTED');
+    expect(response['event.name']).toBe('AI_RESPONSE_RECEIVED');
+    expect(request['kavia.request.id']).toBe(response['kavia.request.id']);
+
+    const sink = new CapturingSink();
+    const logSpy = jest.spyOn(console, 'log').mockImplementation(() => undefined);
+    const logger = createLogger(baseConfig({ sinks: [sink] }));
+    const emitter = new EventEmitter(logger);
+    emitter.emitAiRequest({ 'kavia.request.id': 'req-2', 'kavia.prompt': 'p' });
+    emitter.emitAiResponse({ 'kavia.request.id': 'req-2', 'kavia.tokens.total': 1 });
+    expect(sink.events[0]['kavia.request.id']).toBe('req-2');
+    expect(sink.events[1]['kavia.request.id']).toBe('req-2');
+    logSpy.mockRestore();
+    logger.close();
+  });
+
+  it('exports through kafka REST proxy sink', async () => {
+    const bodies: Buffer[] = [];
+    const server = createServer((req, res) => {
+      const chunks: Buffer[] = [];
+      req.on('data', (chunk) => chunks.push(chunk as Buffer));
+      req.on('end', () => {
+        bodies.push(Buffer.concat(chunks));
+        res.statusCode = 200;
+        res.end();
+      });
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const address = server.address();
+    if (!address || typeof address === 'string') {
+      throw new Error('expected TCP address');
+    }
+    const base = `http://127.0.0.1:${address.port}`;
+    const logger = createLogger(
+      baseConfig({
+        exporter: 'kafka',
+        'exporter.kafka.topic': 'dt3-events',
+        'exporter.kafka.rest_endpoint': base,
+      }),
+    );
+    logger.info('k', { 'event.name': 'KAFKA_NODE' });
+    await logger.flush();
+    expect(bodies.length).toBeGreaterThanOrEqual(1);
+    const payload = JSON.parse(bodies[0].toString('utf8')) as {
+      records: Array<{ value: { 'event.name': string } }>;
+    };
+    expect(payload.records[0].value['event.name']).toBe('KAFKA_NODE');
+    logger.close();
+    await new Promise<void>((resolve, reject) =>
+      server.close((error) => (error ? reject(error) : resolve())),
+    );
   });
 });

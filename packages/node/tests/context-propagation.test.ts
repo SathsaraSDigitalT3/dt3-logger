@@ -11,6 +11,7 @@ const baseConfig = (overrides: Record<string, unknown> = {}): Record<string, unk
   'deployment.environment': 'test',
   'validation.mode': ValidationMode.STRICT,
   exporter: 'stdout',
+  'tracing.auto_generate_ids': false,
   ...overrides,
 });
 

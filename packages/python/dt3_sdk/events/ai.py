@@ -73,6 +73,36 @@ def build_response_received(message: str = "AI response received", **kwargs: Any
     return build_ai_event("AI_RESPONSE_RECEIVED", message, **kwargs)
 
 
+def build_ai_request_event(
+    message: str = "AI request submitted",
+    *,
+    request_id: Optional[str] = None,
+    **kwargs: Any,
+) -> Dict[str, Any]:
+    """Build an AI request event (prompt side), correlated by ``kavia.request.id``."""
+    return build_ai_event(
+        "AI_PROMPT_SUBMITTED",
+        message,
+        request_id=request_id,
+        **kwargs,
+    )
+
+
+def build_ai_response_event(
+    message: str = "AI response received",
+    *,
+    request_id: Optional[str] = None,
+    **kwargs: Any,
+) -> Dict[str, Any]:
+    """Build an AI response event, correlated to the request via ``kavia.request.id``."""
+    return build_ai_event(
+        "AI_RESPONSE_RECEIVED",
+        message,
+        request_id=request_id,
+        **kwargs,
+    )
+
+
 def build_tool_invocation(message: str = "AI tool invocation", **kwargs: Any) -> Dict[str, Any]:
     return build_ai_event("AI_TOOL_INVOCATION", message, **kwargs)
 

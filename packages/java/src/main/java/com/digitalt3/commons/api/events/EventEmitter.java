@@ -82,4 +82,22 @@ public final class EventEmitter {
 
         logger.event(builder.build());
     }
+
+    /**
+     * Emit a typed AI request event.
+     *
+     * @param kaviaAttributes AI request attributes
+     */
+    public void emitAiRequest(Map<String, Object> kaviaAttributes) {
+        emit(AiEvents.request(kaviaAttributes));
+    }
+
+    /**
+     * Emit a typed AI response event.
+     *
+     * @param kaviaAttributes AI response attributes
+     */
+    public void emitAiResponse(Map<String, Object> kaviaAttributes) {
+        emit(AiEvents.response(kaviaAttributes));
+    }
 }

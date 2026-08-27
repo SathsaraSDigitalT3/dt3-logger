@@ -1,4 +1,4 @@
-import { randomUUID } from 'crypto';
+import { randomBytes, randomUUID } from 'crypto';
 
 import { EventSink } from '../../api/EventSink';
 import { Logger } from '../../api/Logger';
@@ -18,6 +18,7 @@ import {
   Dt3LifecycleError,
   Dt3MaskingError,
 } from '../errors';
+import { EventHubTransport, KafkaTransport } from '../KafkaTransport';
 import { MaskingEngine } from '../masking';
 import { MultiSinkFanout } from '../MultiSinkFanout';
 import { OtlpTransport } from '../OtlpTransport';
@@ -26,7 +27,11 @@ import { TimerImpl } from '../Timer';
 import { TracerImpl } from '../Tracer';
 import { LogEventValidator, ValidationError } from '../validation';
 
-const BUILTIN_EXPORTERS = new Set(['stdout', 'file', 'http', 'otlp']);
+const BUILTIN_EXPORTERS = new Set(['stdout', 'file', 'http', 'otlp', 'kafka', 'eventhub']);
+
+function randomBytesHex(byteLength: number): string {
+  return randomBytes(byteLength).toString('hex');
+}
 
 /**
  * Concrete DT3 logger that builds, validates, batches, and exports structured events.
@@ -39,6 +44,7 @@ export class LoggerImpl implements Logger {
   private readonly validationMode: ValidationMode;
   private readonly autoGenerateCorrelationId: boolean;
   private readonly spanEventsEnabled: boolean;
+  private readonly autoGenerateIds: boolean;
   private readonly maskingEngine: MaskingEngine;
   private readonly validator: LogEventValidator;
   private readonly fileTransport?: FileTransport;
@@ -131,6 +137,10 @@ export class LoggerImpl implements Logger {
         config['tracing.span_events.enabled'] ?? true,
         'tracing.span_events.enabled',
       );
+      this.autoGenerateIds = this.requireBoolean(
+        config['tracing.auto_generate_ids'] ?? true,
+        'tracing.auto_generate_ids',
+      );
       this.maskingEngine = new MaskingEngine({
         sensitiveFields: Array.isArray(config['masking.fields'])
           ? config['masking.fields'].filter((field): field is string => typeof field === 'string')
@@ -218,6 +228,29 @@ export class LoggerImpl implements Logger {
         this.resolveHeaders(config['otlp.headers'], 'otlp.headers'),
         (error) => this.observeAsyncDeliveryFailure(error),
         !this.failOpen,
+      );
+    }
+
+    if (exporterName === 'kafka') {
+      return new KafkaTransport(
+        typeof config['exporter.kafka.topic'] === 'string' ? config['exporter.kafka.topic'] : '',
+        typeof config['exporter.kafka.rest_endpoint'] === 'string'
+          ? config['exporter.kafka.rest_endpoint']
+          : '',
+        typeof config['exporter.kafka.timeout'] === 'number' ? config['exporter.kafka.timeout'] : 10000,
+        this.resolveHeaders(config['exporter.kafka.headers'], 'exporter.kafka.headers'),
+      );
+    }
+
+    if (exporterName === 'eventhub') {
+      return new EventHubTransport(
+        typeof config['exporter.eventhub.endpoint'] === 'string'
+          ? config['exporter.eventhub.endpoint']
+          : '',
+        typeof config['exporter.eventhub.timeout'] === 'number'
+          ? config['exporter.eventhub.timeout']
+          : 10000,
+        this.resolveHeaders(config['exporter.eventhub.headers'], 'exporter.eventhub.headers'),
       );
     }
 
@@ -408,6 +441,15 @@ export class LoggerImpl implements Logger {
 
     if (typeof logEvent['event.id'] !== 'string' || logEvent['event.id'].length === 0) {
       logEvent['event.id'] = randomUUID();
+    }
+
+    if (this.autoGenerateIds) {
+      if (typeof logEvent['trace.id'] !== 'string' || !/^[a-f0-9]{32}$/.test(logEvent['trace.id'])) {
+        logEvent['trace.id'] = randomBytesHex(16);
+      }
+      if (typeof logEvent['span.id'] !== 'string' || !/^[a-f0-9]{16}$/.test(logEvent['span.id'])) {
+        logEvent['span.id'] = randomBytesHex(8);
+      }
     }
 
     if (

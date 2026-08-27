@@ -136,6 +136,10 @@ class LoggerImpl:
             self.config.get("tracing.span_events.enabled", True),
             "tracing.span_events.enabled",
         )
+        self._auto_generate_ids = self._require_boolean(
+            self.config.get("tracing.auto_generate_ids", True),
+            "tracing.auto_generate_ids",
+        )
 
         sink_pairs = self._build_sink_pairs(exporters)
         self._fanout = MultiSinkFanout(
@@ -220,6 +224,31 @@ class LoggerImpl:
             )
             self._otlp_transport = transport
             return transport
+        if exporter_name == "kafka":
+            from dt3_sdk.kafka_transport import KafkaTransport
+
+            timeout_ms = self._config_value("exporter.kafka.timeout", default=10000)
+            transport = KafkaTransport(
+                topic=str(self._config_value("exporter.kafka.topic", default="") or ""),
+                rest_endpoint=str(
+                    self._config_value("exporter.kafka.rest_endpoint", default="") or ""
+                ),
+                timeout=self._timeout_seconds(timeout_ms, "exporter.kafka.timeout"),
+                headers=self._config_value("exporter.kafka.headers", default=None),
+            )
+            return transport
+        if exporter_name == "eventhub":
+            from dt3_sdk.kafka_transport import EventHubTransport
+
+            timeout_ms = self._config_value("exporter.eventhub.timeout", default=10000)
+            transport = EventHubTransport(
+                endpoint=str(
+                    self._config_value("exporter.eventhub.endpoint", default="") or ""
+                ),
+                timeout=self._timeout_seconds(timeout_ms, "exporter.eventhub.timeout"),
+                headers=self._config_value("exporter.eventhub.headers", default=None),
+            )
+            return transport
 
         from dt3_sdk.errors import Dt3ConfigurationError
 
@@ -288,6 +317,16 @@ class LoggerImpl:
         event_id = log_event.get("event.id")
         if not isinstance(event_id, str) or not event_id.strip():
             log_event["event.id"] = str(uuid.uuid4())
+
+        if self._auto_generate_ids:
+            from dt3_sdk.tracer import generate_span_id, generate_trace_id
+
+            trace_id = log_event.get("trace.id")
+            if not isinstance(trace_id, str) or len(trace_id) != 32:
+                log_event["trace.id"] = generate_trace_id()
+            span_id = log_event.get("span.id")
+            if not isinstance(span_id, str) or len(span_id) != 16:
+                log_event["span.id"] = generate_span_id()
 
         component_name = log_event.get("component.name")
         if not isinstance(component_name, str) or not component_name.strip():

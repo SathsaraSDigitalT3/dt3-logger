@@ -20,6 +20,8 @@ from .events import (
     build_ai_memory_retrieval,
     build_ai_prompt_submitted,
     build_ai_rag_retrieval,
+    build_ai_request_event,
+    build_ai_response_event,
     build_ai_response_received,
     build_ai_safety_filter_applied,
     build_ai_tool_invocation,
@@ -31,6 +33,7 @@ from .events import (
 from .factory import create_logger
 from .file_transport import FileTransport
 from .http_transport import HttpTransport, HttpTransportError
+from .kafka_transport import EventHubTransport, KafkaTransport, KafkaTransportError
 from .masking import MaskingEngine
 from .otlp_transport import OtlpTransport, OtlpTransportError
 from .sink import EventSink, MultiSinkFanout, StdoutSink
@@ -56,10 +59,13 @@ __all__ = [
     "Dt3TransportError",
     "ErrorHandler",
     "EventEmitter",
+    "EventHubTransport",
     "EventSink",
     "FileTransport",
     "HttpTransport",
     "HttpTransportError",
+    "KafkaTransport",
+    "KafkaTransportError",
     "LogEventValidator",
     "MaskingEngine",
     "MultiSinkFanout",
@@ -77,6 +83,8 @@ __all__ = [
     "build_ai_memory_retrieval",
     "build_ai_prompt_submitted",
     "build_ai_rag_retrieval",
+    "build_ai_request_event",
+    "build_ai_response_event",
     "build_ai_response_received",
     "build_ai_safety_filter_applied",
     "build_ai_tool_invocation",

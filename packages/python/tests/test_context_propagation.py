@@ -19,6 +19,8 @@ def _config(**overrides: object) -> dict[str, object]:
         "service.version": "1.0.0",
         "deployment.environment": "test",
         "exporter": "stdout",
+        # Context tests assert presence/absence of scoped ids; disable auto-fill.
+        "tracing.auto_generate_ids": False,
         **overrides,
     }
 

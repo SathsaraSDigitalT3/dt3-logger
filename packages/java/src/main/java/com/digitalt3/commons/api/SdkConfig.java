@@ -29,6 +29,13 @@ public class SdkConfig {
     private String otlpEndpoint;
     private long otlpTimeout = 10000;
     private Map<String, String> otlpHeaders = new LinkedHashMap<>();
+    private String kafkaTopic;
+    private String kafkaRestEndpoint;
+    private long kafkaTimeout = 10000;
+    private Map<String, String> kafkaHeaders = new LinkedHashMap<>();
+    private String eventHubEndpoint;
+    private long eventHubTimeout = 10000;
+    private Map<String, String> eventHubHeaders = new LinkedHashMap<>();
     private boolean maskingEnabled = true;
     private List<String> maskingFields = new ArrayList<>();
     private String maskingReplacementValue = "[REDACTED]";
@@ -38,6 +45,7 @@ public class SdkConfig {
     private long batchingFlushIntervalMs = 5000;
     private boolean autoGenerateCorrelationId;
     private boolean tracingSpanEventsEnabled = true;
+    private boolean tracingAutoGenerateIds = true;
     private boolean errorDiagnosticsEnabled = true;
     private boolean errorDiagnosticsIncludeStack;
     private int errorRateLimitPerMinute = 20;
@@ -110,6 +118,13 @@ public class SdkConfig {
         setStringIfPresent(values, "otlp.endpoint", this::setOtlpEndpoint);
         setLongIfPresent(values, "otlp.timeout", this::setOtlpTimeout);
         setHeadersIfPresent(values, "otlp.headers", this::setOtlpHeaders);
+        setStringIfPresent(values, "exporter.kafka.topic", this::setKafkaTopic);
+        setStringIfPresent(values, "exporter.kafka.rest_endpoint", this::setKafkaRestEndpoint);
+        setLongIfPresent(values, "exporter.kafka.timeout", this::setKafkaTimeout);
+        setHeadersIfPresent(values, "exporter.kafka.headers", this::setKafkaHeaders);
+        setStringIfPresent(values, "exporter.eventhub.endpoint", this::setEventHubEndpoint);
+        setLongIfPresent(values, "exporter.eventhub.timeout", this::setEventHubTimeout);
+        setHeadersIfPresent(values, "exporter.eventhub.headers", this::setEventHubHeaders);
         setBooleanIfPresent(values, "masking.enabled", this::setMaskingEnabled);
         setStringListIfPresent(values, "masking.fields", this::setMaskingFields);
         setBooleanIfPresent(values, "batching.enabled", this::setBatchingEnabled);
@@ -127,6 +142,11 @@ public class SdkConfig {
             values,
             "tracing.span_events.enabled",
             this::setTracingSpanEventsEnabled
+        );
+        setBooleanIfPresent(
+            values,
+            "tracing.auto_generate_ids",
+            this::setTracingAutoGenerateIds
         );
         setBooleanIfPresent(
             values,
@@ -441,6 +461,36 @@ public class SdkConfig {
             ? new LinkedHashMap<>()
             : new LinkedHashMap<>(otlpHeaders);
     }
+
+    public String getKafkaTopic() { return kafkaTopic; }
+    public void setKafkaTopic(String kafkaTopic) { this.kafkaTopic = kafkaTopic; }
+    public String getKafkaRestEndpoint() { return kafkaRestEndpoint; }
+    public void setKafkaRestEndpoint(String kafkaRestEndpoint) {
+        this.kafkaRestEndpoint = kafkaRestEndpoint;
+    }
+    public long getKafkaTimeout() { return kafkaTimeout; }
+    public void setKafkaTimeout(long kafkaTimeout) { this.kafkaTimeout = kafkaTimeout; }
+    public Map<String, String> getKafkaHeaders() { return Map.copyOf(kafkaHeaders); }
+    public void setKafkaHeaders(Map<String, String> kafkaHeaders) {
+        this.kafkaHeaders = kafkaHeaders == null
+            ? new LinkedHashMap<>()
+            : new LinkedHashMap<>(kafkaHeaders);
+    }
+    public String getEventHubEndpoint() { return eventHubEndpoint; }
+    public void setEventHubEndpoint(String eventHubEndpoint) {
+        this.eventHubEndpoint = eventHubEndpoint;
+    }
+    public long getEventHubTimeout() { return eventHubTimeout; }
+    public void setEventHubTimeout(long eventHubTimeout) {
+        this.eventHubTimeout = eventHubTimeout;
+    }
+    public Map<String, String> getEventHubHeaders() { return Map.copyOf(eventHubHeaders); }
+    public void setEventHubHeaders(Map<String, String> eventHubHeaders) {
+        this.eventHubHeaders = eventHubHeaders == null
+            ? new LinkedHashMap<>()
+            : new LinkedHashMap<>(eventHubHeaders);
+    }
+
     public boolean isMaskingEnabled() { return maskingEnabled; }
     public void setMaskingEnabled(boolean maskingEnabled) { this.maskingEnabled = maskingEnabled; }
 
@@ -558,6 +608,26 @@ public class SdkConfig {
      */
     public void setTracingSpanEventsEnabled(boolean tracingSpanEventsEnabled) {
         this.tracingSpanEventsEnabled = tracingSpanEventsEnabled;
+    }
+
+    // PUBLIC_INTERFACE
+    /**
+     * Return whether absent trace.id / span.id values are auto-generated.
+     *
+     * @return {@code true} when every event receives W3C ids when missing (default)
+     */
+    public boolean isTracingAutoGenerateIds() {
+        return tracingAutoGenerateIds;
+    }
+
+    // PUBLIC_INTERFACE
+    /**
+     * Configure automatic generation of W3C trace.id and span.id when absent.
+     *
+     * @param tracingAutoGenerateIds whether missing ids are generated
+     */
+    public void setTracingAutoGenerateIds(boolean tracingAutoGenerateIds) {
+        this.tracingAutoGenerateIds = tracingAutoGenerateIds;
     }
 
     // PUBLIC_INTERFACE

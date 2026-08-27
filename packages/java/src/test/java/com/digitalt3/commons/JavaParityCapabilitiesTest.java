@@ -349,6 +349,7 @@ public class JavaParityCapabilitiesTest {
         config.setServiceName("parity-test-service");
         config.setServiceVersion("1.0.0");
         config.setDeploymentEnvironment("test");
+        config.setTracingAutoGenerateIds(false);
         return config;
     }
 

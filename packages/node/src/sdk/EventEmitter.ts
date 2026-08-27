@@ -6,6 +6,8 @@ import {
   ApiEventFields,
   ApiEventName,
   buildAiEvent,
+  buildAiRequestEvent,
+  buildAiResponseEvent,
   buildApiEvent,
   buildDatabaseEvent,
   buildMessagingEvent,
@@ -79,5 +81,19 @@ export class EventEmitter {
    */
   public emitAi(eventName: AiEventName, fields: AiEventFields = {}): void {
     this.emit(buildAiEvent(eventName, fields));
+  }
+
+  /**
+   * Emit an AI request (prompt-side) event.
+   */
+  public emitAiRequest(fields: AiEventFields = {}): void {
+    this.emit(buildAiRequestEvent(fields));
+  }
+
+  /**
+   * Emit an AI response event correlated by request id.
+   */
+  public emitAiResponse(fields: AiEventFields = {}): void {
+    this.emit(buildAiResponseEvent(fields));
   }
 }

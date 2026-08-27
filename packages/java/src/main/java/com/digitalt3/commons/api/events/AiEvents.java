@@ -43,6 +43,26 @@ public final class AiEvents {
         return build("AI_SAFETY_FILTER_APPLIED", kaviaAttributes);
     }
 
+    /**
+     * Build an AI request (prompt-side) event correlated by {@code kavia.request.id}.
+     *
+     * @param kaviaAttributes AI attributes including prompt/model/request id
+     * @return canonical LogEvent for {@code AI_PROMPT_SUBMITTED}
+     */
+    public static LogEvent request(Map<String, Object> kaviaAttributes) {
+        return promptSubmitted(kaviaAttributes);
+    }
+
+    /**
+     * Build an AI response event correlated by {@code kavia.request.id}.
+     *
+     * @param kaviaAttributes AI attributes including response/tokens/cost
+     * @return canonical LogEvent for {@code AI_RESPONSE_RECEIVED}
+     */
+    public static LogEvent response(Map<String, Object> kaviaAttributes) {
+        return responseReceived(kaviaAttributes);
+    }
+
     public static Map<String, Object> asMap(String eventName, Map<String, Object> fields) {
         Map<String, Object> map = new LinkedHashMap<>();
         map.put("event.name", eventName);

@@ -1,5 +1,5 @@
-export * from './api/Logger';
 export * from './api/EventSink';
+export * from './api/Logger';
 export * from './api/Timer';
 export * from './api/Tracer';
 export * from './api/types';
@@ -12,6 +12,7 @@ export * from './sdk/events';
 export * from './sdk/factory';
 export * from './sdk/FileTransport';
 export * from './sdk/HttpTransport';
+export * from './sdk/KafkaTransport';
 export * from './sdk/masking';
 export * from './sdk/MultiSinkFanout';
 export * from './sdk/OtlpTransport';

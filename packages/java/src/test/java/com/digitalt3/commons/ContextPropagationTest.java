@@ -249,6 +249,7 @@ public class ContextPropagationTest {
         config.setServiceName("context-test-service");
         config.setServiceVersion("1.0.0");
         config.setDeploymentEnvironment("test");
+        config.setTracingAutoGenerateIds(false);
         return config;
     }
 

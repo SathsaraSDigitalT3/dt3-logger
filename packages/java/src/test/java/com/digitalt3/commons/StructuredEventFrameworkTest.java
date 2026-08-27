@@ -297,6 +297,35 @@ public class StructuredEventFrameworkTest {
         }
     }
 
+    @Test
+    public void autoGeneratesTraceAndSpanIds() {
+        JsonNode event = captureEvents(() -> {
+            Logger logger = LoggerFactory.createLogger(baseConfig());
+            logger.info("traced", Map.of("event.name", "AUTO_TRACE"));
+        }).get(0);
+
+        assertTrue(event.path("trace.id").asText().matches("^[a-f0-9]{32}$"));
+        assertTrue(event.path("span.id").asText().matches("^[a-f0-9]{16}$"));
+    }
+
+    @Test
+    public void aiRequestAndResponseBuildersShareRequestId() {
+        LogEvent request = AiEvents.request(Map.of(
+            "kavia.request.id", "req-7",
+            "kavia.prompt", "hello",
+            "kavia.model", "gpt-4o"
+        ));
+        LogEvent response = AiEvents.response(Map.of(
+            "kavia.request.id", "req-7",
+            "kavia.tokens.total", 4,
+            "kavia.finish_reason", "stop"
+        ));
+        assertEquals("AI_PROMPT_SUBMITTED", request.getEventName());
+        assertEquals("AI_RESPONSE_RECEIVED", response.getEventName());
+        assertEquals("req-7", request.getAttributes().get("kavia.request.id"));
+        assertEquals("req-7", response.getAttributes().get("kavia.request.id"));
+    }
+
     private SdkConfig baseConfig() {
         SdkConfig config = new SdkConfig();
         config.setServiceName("structured-event-test");

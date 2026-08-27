@@ -77,3 +77,12 @@ attributes:
 masking:
   - Prompt and response payloads must be treated as sensitive by default
   - Token-count attribute names must not use the literal field name token
+
+request_response_split:
+  description: >
+    Prefer separate request and response events correlated by kavia.request.id.
+  request_event: AI_PROMPT_SUBMITTED
+  response_event: AI_RESPONSE_RECEIVED
+  builders:
+    - build_ai_request_event / buildAiRequestEvent / AiEvents.request
+    - build_ai_response_event / buildAiResponseEvent / AiEvents.response

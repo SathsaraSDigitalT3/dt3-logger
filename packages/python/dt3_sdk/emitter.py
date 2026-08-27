@@ -36,3 +36,15 @@ class EventEmitter:
     # PUBLIC_INTERFACE
     def emit_ai(self, event_name: str, message: str, **kwargs: Any) -> None:
         self.emit(build_ai_event(event_name, message, **kwargs))
+
+    # PUBLIC_INTERFACE
+    def emit_ai_request(self, message: str = "AI request submitted", **kwargs: Any) -> None:
+        from dt3_sdk.events.ai import build_ai_request_event
+
+        self.emit(build_ai_request_event(message, **kwargs))
+
+    # PUBLIC_INTERFACE
+    def emit_ai_response(self, message: str = "AI response received", **kwargs: Any) -> None:
+        from dt3_sdk.events.ai import build_ai_response_event
+
+        self.emit(build_ai_response_event(message, **kwargs))

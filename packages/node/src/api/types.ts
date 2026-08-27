@@ -220,7 +220,7 @@ export interface SdkConfig {
   /** Optional callback invoked for each handled SDK-internal error report. */
   'error.on_error'?: (report: unknown) => void;
 
-  /** Exporter backend: `'stdout'`, `'file'`, `'http'`, `'otlp'`. Defaults to `'stdout'`. */
+  /** Exporter backend: `'stdout'`, `'file'`, `'http'`, `'otlp'`, `'kafka'`, `'eventhub'`. Defaults to `'stdout'`. */
   exporter?: string;
 
   /**
@@ -242,6 +242,27 @@ export interface SdkConfig {
 
   /** Optional HTTP request headers for the HTTP exporter. */
   'exporter.http.headers'?: Headers;
+
+  /** Kafka topic when exporter is `'kafka'`. */
+  'exporter.kafka.topic'?: string;
+
+  /** Kafka REST Proxy base URL when exporter is `'kafka'`. */
+  'exporter.kafka.rest_endpoint'?: string;
+
+  /** Kafka REST timeout in milliseconds. Defaults to `10000`. */
+  'exporter.kafka.timeout'?: number;
+
+  /** Optional headers for Kafka REST export. */
+  'exporter.kafka.headers'?: Headers;
+
+  /** Azure Event Hubs HTTPS messages URL when exporter is `'eventhub'`. */
+  'exporter.eventhub.endpoint'?: string;
+
+  /** Event Hub timeout in milliseconds. Defaults to `10000`. */
+  'exporter.eventhub.timeout'?: number;
+
+  /** Optional headers for Event Hub export (e.g. SAS). */
+  'exporter.eventhub.headers'?: Headers;
 
   /** OTLP/HTTP Logs endpoint when exporter is `'otlp'`. */
   'otlp.endpoint'?: string;
@@ -272,4 +293,10 @@ export interface SdkConfig {
 
   /** Emit span completion LogEvents when spans end. Defaults to `true`. */
   'tracing.span_events.enabled'?: boolean;
+
+  /**
+   * Auto-generate W3C `trace.id` and `span.id` when absent so every event
+   * carries distributed-trace identifiers. Defaults to `true`.
+   */
+  'tracing.auto_generate_ids'?: boolean;
 }

@@ -285,6 +285,17 @@ public final class StdoutLogger implements Logger {
                 sdkConfig.getOtlpTimeout(),
                 sdkConfig.getOtlpHeaders()
             );
+            case "kafka" -> KafkaTransport.kafkaRest(
+                sdkConfig.getKafkaTopic(),
+                sdkConfig.getKafkaRestEndpoint(),
+                sdkConfig.getKafkaTimeout(),
+                sdkConfig.getKafkaHeaders()
+            );
+            case "eventhub" -> KafkaTransport.eventHub(
+                sdkConfig.getEventHubEndpoint(),
+                sdkConfig.getEventHubTimeout(),
+                sdkConfig.getEventHubHeaders()
+            );
             default -> throw new IllegalArgumentException("Unsupported exporter: " + exporter);
         };
     }
@@ -528,6 +539,7 @@ public final class StdoutLogger implements Logger {
         }
         applyComponentName(event);
         ensureEventId(event);
+        ensureTraceIds(event);
 
         if (error != null) {
             event.put("error.type", error.getClass().getSimpleName());
@@ -564,6 +576,7 @@ public final class StdoutLogger implements Logger {
         removeIfNotConfigured(event, "deployment.environment", config.getDeploymentEnvironment());
         applyComponentName(event);
         ensureEventId(event);
+        ensureTraceIds(event);
         return event;
     }
 
@@ -572,6 +585,30 @@ public final class StdoutLogger implements Logger {
         if (!(eventId instanceof String text) || text.isBlank()) {
             event.put("event.id", UUID.randomUUID().toString());
         }
+    }
+
+    private void ensureTraceIds(Map<String, Object> event) {
+        if (!config.isTracingAutoGenerateIds()) {
+            return;
+        }
+        Object traceId = event.get("trace.id");
+        if (!(traceId instanceof String traceText) || !traceText.matches("^[a-f0-9]{32}$")) {
+            event.put("trace.id", randomHex(16));
+        }
+        Object spanId = event.get("span.id");
+        if (!(spanId instanceof String spanText) || !spanText.matches("^[a-f0-9]{16}$")) {
+            event.put("span.id", randomHex(8));
+        }
+    }
+
+    private static String randomHex(int byteLength) {
+        byte[] bytes = new byte[byteLength];
+        new java.security.SecureRandom().nextBytes(bytes);
+        StringBuilder builder = new StringBuilder(byteLength * 2);
+        for (byte value : bytes) {
+            builder.append(String.format("%02x", value));
+        }
+        return builder.toString();
     }
 
     private void applyComponentName(Map<String, Object> event) {

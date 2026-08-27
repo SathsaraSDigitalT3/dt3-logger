@@ -20,6 +20,7 @@ const baseConfig = (
   'deployment.environment': 'test',
   exporter: 'stdout',
   'validation.mode': validationMode,
+  'tracing.auto_generate_ids': false,
   ...overrides,
 });
 

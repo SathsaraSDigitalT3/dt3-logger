@@ -44,7 +44,7 @@ configuration_fields:
       description: Whether SDK errors should be swallowed
     - name: exporter
       type: string
-      enum: [stdout, file, http, otlp]
+      enum: [stdout, file, http, otlp, kafka, eventhub]
       default: stdout
       description: >
         Single log export destination (backward compatible).
@@ -52,7 +52,8 @@ configuration_fields:
     - name: exporters
       type: list<string>
       description: >
-        Multiple built-in exporters for fan-out (stdout, file, http, otlp).
+        Multiple built-in exporters for fan-out
+        (stdout, file, http, otlp, kafka, eventhub).
         When set, takes precedence over exporter.
     - name: exporter.file.path
       type: string
@@ -64,6 +65,29 @@ configuration_fields:
       type: integer
       default: 5000
       description: HTTP exporter timeout
+    - name: exporter.kafka.topic
+      type: string
+      description: Kafka topic name for the kafka exporter
+    - name: exporter.kafka.rest_endpoint
+      type: string
+      description: Kafka REST Proxy base URL (Confluent-compatible)
+    - name: exporter.kafka.timeout
+      type: integer
+      default: 10000
+      description: Kafka REST export timeout in milliseconds
+    - name: exporter.kafka.headers
+      type: map<string,string>
+      description: Optional headers for Kafka REST export (e.g. auth)
+    - name: exporter.eventhub.endpoint
+      type: string
+      description: Azure Event Hubs HTTPS messages endpoint URL
+    - name: exporter.eventhub.timeout
+      type: integer
+      default: 10000
+      description: Event Hub export timeout in milliseconds
+    - name: exporter.eventhub.headers
+      type: map<string,string>
+      description: Optional headers for Event Hub export (e.g. SAS token)
     - name: masking.enabled
       type: boolean
       default: true
@@ -91,3 +115,9 @@ configuration_fields:
       type: boolean
       default: true
       description: Emit span completion LogEvents when spans end
+    - name: tracing.auto_generate_ids
+      type: boolean
+      default: true
+      description: >
+        Auto-generate W3C trace.id and span.id when absent so every
+        emitted event carries distributed-trace identifiers

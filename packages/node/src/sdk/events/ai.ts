@@ -107,3 +107,23 @@ export function buildAiEvent(
 
   return event;
 }
+
+/**
+ * Build an AI request (prompt-side) event correlated by `kavia.request.id`.
+ */
+export function buildAiRequestEvent(fields: AiEventFields = {}): Partial<LogEvent> {
+  return buildAiEvent('AI_PROMPT_SUBMITTED', {
+    message: fields.message ?? 'AI request submitted',
+    ...fields,
+  });
+}
+
+/**
+ * Build an AI response event correlated by `kavia.request.id`.
+ */
+export function buildAiResponseEvent(fields: AiEventFields = {}): Partial<LogEvent> {
+  return buildAiEvent('AI_RESPONSE_RECEIVED', {
+    message: fields.message ?? 'AI response received',
+    ...fields,
+  });
+}
