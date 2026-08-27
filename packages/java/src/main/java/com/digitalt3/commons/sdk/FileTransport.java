@@ -43,7 +43,7 @@ public final class FileTransport implements LogTransport {
      * Serialize and append one final canonical structured event as a JSON line.
      *
      * @param logEvent already-masked and validation-processed event
-     * @throws IllegalStateException if the destination cannot be created or written
+     * @throws Dt3SdkException if the destination cannot be created or written
      */
     @Override
     public synchronized void write(LogEvent logEvent) {
@@ -55,7 +55,7 @@ public final class FileTransport implements LogTransport {
      * Append a serialized final event produced by the logger pipeline.
      *
      * @param serializedEvent canonical JSON event without a trailing line separator
-     * @throws IllegalStateException if the destination cannot be created or written
+     * @throws Dt3SdkException if the destination cannot be created or written
      */
     synchronized void writeJson(String serializedEvent) {
         Objects.requireNonNull(serializedEvent, "serializedEvent must not be null");
@@ -79,9 +79,12 @@ public final class FileTransport implements LogTransport {
                 StandardOpenOption.APPEND
             );
         } catch (IOException exception) {
-            throw new IllegalStateException(
+            throw new Dt3SdkException(
                 "Unable to write log event to file exporter destination: " + filePath,
-                exception
+                exception,
+                Dt3ErrorCode.FILE_WRITE_FAILED,
+                false,
+                Dt3ErrorPhase.DELIVERY
             );
         }
     }

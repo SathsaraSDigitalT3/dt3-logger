@@ -4,6 +4,9 @@ import com.digitalt3.commons.api.Logger;
 import com.digitalt3.commons.api.LoggerFactory;
 import com.digitalt3.commons.api.SdkConfig;
 import com.digitalt3.commons.api.ValidationMode;
+import com.digitalt3.commons.sdk.Dt3ErrorCode;
+import com.digitalt3.commons.sdk.Dt3ErrorPhase;
+import com.digitalt3.commons.sdk.Dt3SdkException;
 import com.digitalt3.commons.sdk.LogEventValidationException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -230,10 +233,15 @@ public class FileTransportTest {
         SdkConfig config = fileConfig(directoryDestination, false);
         Logger logger = LoggerFactory.createLogger(config);
 
-        assertThrows(
-            IllegalStateException.class,
+        Dt3SdkException exception = assertThrows(
+            Dt3SdkException.class,
             () -> logger.info("Transport failure", Map.of("event.name", "FAIL_CLOSED_EVENT"))
         );
+
+        assertEquals(Dt3ErrorCode.FILE_WRITE_FAILED, exception.getCode());
+        assertEquals(Dt3ErrorPhase.DELIVERY, exception.getPhase());
+        assertFalse(exception.isRetryable());
+        assertTrue(exception.getCause() instanceof IOException);
     }
 
     private List<JsonNode> readJsonLines(Path logFile) throws IOException {

@@ -4,6 +4,7 @@
 export enum Dt3ErrorCode {
   ConfigurationInvalid = 'DT3_CONFIG_INVALID',
   ExporterUnsupported = 'DT3_EXPORTER_UNSUPPORTED',
+  FileWriteFailed = 'DT3_FILE_WRITE_FAILED',
   TransportUnavailable = 'DT3_TRANSPORT_UNAVAILABLE',
   TransportTimeout = 'DT3_TRANSPORT_TIMEOUT',
   TransportRejected = 'DT3_TRANSPORT_REJECTED',

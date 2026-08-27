@@ -8,8 +8,6 @@ import com.digitalt3.commons.api.Timer;
 import com.digitalt3.commons.api.ValidationMode;
 import com.digitalt3.commons.api.Validator;
 
-import java.io.PrintWriter;
-import java.io.StringWriter;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -39,6 +37,7 @@ public final class StdoutLogger implements Logger {
     private final HttpTransport httpTransport;
     private final OtlpTransport otlpTransport;
     private final EventBatcher batcher;
+    private final ErrorHandler errorHandler;
     private boolean closed;
 
     /**
@@ -49,24 +48,43 @@ public final class StdoutLogger implements Logger {
      *     or the file exporter has no destination path
      */
     public StdoutLogger(SdkConfig config) {
-        this.config = Objects.requireNonNull(config, "config must not be null");
-        this.maskingEngine = new RecursiveMaskingEngine(
-            config.getMaskingFields(),
-            config.getMaskingReplacementValue(),
-            config.isMaskingTrackMaskedFields(),
-            config.isMaskingEnabled()
-        );
-        this.eventValidator = new MapEventValidator();
-        this.fileTransport = createFileTransport(config);
-        this.httpTransport = createHttpTransport(config);
-        this.otlpTransport = createOtlpTransport(config);
-        this.batcher = config.isBatchingEnabled()
-            ? new EventBatcher(
-                this::writeFinalEvent,
-                config.getBatchingMaxSize(),
-                config.getBatchingFlushIntervalMs()
-            )
-            : null;
+        SdkConfig suppliedConfig = Objects.requireNonNull(config, "config must not be null");
+        ErrorHandler constructionHandler = createConstructionErrorHandler(suppliedConfig);
+        try {
+            this.config = suppliedConfig;
+            this.errorHandler = constructionHandler;
+            this.maskingEngine = new RecursiveMaskingEngine(
+                suppliedConfig.getMaskingFields(),
+                suppliedConfig.getMaskingReplacementValue(),
+                suppliedConfig.isMaskingTrackMaskedFields(),
+                suppliedConfig.isMaskingEnabled()
+            );
+            this.eventValidator = new MapEventValidator();
+            this.fileTransport = createFileTransport(suppliedConfig);
+            this.httpTransport = createHttpTransport(suppliedConfig);
+            this.otlpTransport = createOtlpTransport(suppliedConfig);
+            this.batcher = suppliedConfig.isBatchingEnabled()
+                ? new EventBatcher(
+                    this::writeFinalEvent,
+                    this::handleTimerBatchFailure,
+                    suppliedConfig.getBatchingMaxSize(),
+                    suppliedConfig.getBatchingFlushIntervalMs()
+                )
+                : null;
+        } catch (RuntimeException exception) {
+            constructionHandler.report(exception, Dt3ErrorPhase.CONFIGURATION);
+            throw exception;
+        }
+    }
+
+    // PUBLIC_INTERFACE
+    /**
+     * Return the centralized handler used for SDK-internal errors.
+     *
+     * @return the configured error handler
+     */
+    public ErrorHandler getErrorHandler() {
+        return errorHandler;
     }
 
     // PUBLIC_INTERFACE
@@ -167,29 +185,33 @@ public final class StdoutLogger implements Logger {
     public void flush() {
         ensureOpen();
         if (batcher != null) {
-            batcher.flush();
+            try {
+                batcher.flush();
+            } catch (RuntimeException exception) {
+                handleFailure(exception, Dt3ErrorPhase.BATCHING, false);
+            }
         }
         if (fileTransport != null) {
             try {
                 fileTransport.flush();
-            } catch (IllegalStateException exception) {
-                handleTransportFailure(exception);
+            } catch (RuntimeException exception) {
+                handleFailure(exception, Dt3ErrorPhase.DELIVERY, false);
             }
             return;
         }
         if (httpTransport != null) {
             try {
                 httpTransport.flush();
-            } catch (HttpTransportError | OtlpTransportError exception) {
-                handleTransportFailure(exception);
+            } catch (RuntimeException exception) {
+                handleFailure(exception, Dt3ErrorPhase.DELIVERY, false);
             }
             return;
         }
         if (otlpTransport != null) {
             try {
                 otlpTransport.flush();
-            } catch (HttpTransportError | OtlpTransportError exception) {
-                handleTransportFailure(exception);
+            } catch (RuntimeException exception) {
+                handleFailure(exception, Dt3ErrorPhase.DELIVERY, false);
             }
             return;
         }
@@ -210,32 +232,33 @@ public final class StdoutLogger implements Logger {
         if (closed) {
             return;
         }
+
         if (batcher != null) {
             try {
                 batcher.close();
-            } catch (HttpTransportError | OtlpTransportError | IllegalStateException exception) {
-                handleTransportFailure(exception);
+            } catch (RuntimeException exception) {
+                handleFailure(exception, Dt3ErrorPhase.BATCHING, false);
             }
         }
-        closed = true;
 
+        closed = true;
         if (fileTransport != null) {
             try {
                 fileTransport.shutdown();
-            } catch (IllegalStateException exception) {
-                handleTransportFailure(exception);
+            } catch (RuntimeException exception) {
+                handleFailure(exception, Dt3ErrorPhase.LIFECYCLE, false);
             }
         } else if (httpTransport != null) {
             try {
                 httpTransport.shutdown();
-            } catch (HttpTransportError | OtlpTransportError exception) {
-                handleTransportFailure(exception);
+            } catch (RuntimeException exception) {
+                handleFailure(exception, Dt3ErrorPhase.LIFECYCLE, false);
             }
         } else if (otlpTransport != null) {
             try {
                 otlpTransport.shutdown();
-            } catch (HttpTransportError | OtlpTransportError exception) {
-                handleTransportFailure(exception);
+            } catch (RuntimeException exception) {
+                handleFailure(exception, Dt3ErrorPhase.LIFECYCLE, false);
             }
         }
     }
@@ -248,10 +271,7 @@ public final class StdoutLogger implements Logger {
         if ("file".equalsIgnoreCase(exporter)) {
             return new FileTransport(sdkConfig.getFilePath());
         }
-        if ("http".equalsIgnoreCase(exporter)) {
-            return null;
-        }
-        if ("otlp".equalsIgnoreCase(exporter)) {
+        if ("http".equalsIgnoreCase(exporter) || "otlp".equalsIgnoreCase(exporter)) {
             return null;
         }
 
@@ -278,13 +298,34 @@ public final class StdoutLogger implements Logger {
             : null;
     }
 
+    private ErrorHandler createConstructionErrorHandler(SdkConfig sdkConfig) {
+        try {
+            return new ErrorHandler(
+                sdkConfig.isFailOpen(),
+                sdkConfig.isErrorDiagnosticsEnabled(),
+                sdkConfig.getErrorRateLimitPerMinute(),
+                sdkConfig.getErrorObserver(),
+                sdkConfig.isErrorDiagnosticsIncludeStack()
+            );
+        } catch (RuntimeException exception) {
+            ErrorHandler fallbackHandler = new ErrorHandler(true, true, 20, null);
+            fallbackHandler.report(exception, Dt3ErrorPhase.CONFIGURATION);
+            throw exception;
+        }
+    }
+
     private void log(String severity, String message, Map<String, Object> context, Throwable error) {
         ensureOpen();
         ValidationMode validationMode = config.getValidationMode();
         if (validationMode == null) {
-            throw new IllegalArgumentException(
-                "validationMode must be STRICT, LENIENT, or OFF"
+            handleFailure(
+                new IllegalArgumentException(
+                    "validationMode must be STRICT, LENIENT, or OFF"
+                ),
+                Dt3ErrorPhase.CONFIGURATION,
+                false
             );
+            return;
         }
 
         processEvent(createEvent(severity, message, context, error));
@@ -293,22 +334,42 @@ public final class StdoutLogger implements Logger {
     private void processEvent(Map<String, Object> event) {
         ValidationMode validationMode = config.getValidationMode();
         if (validationMode == null) {
-            throw new IllegalArgumentException(
-                "validationMode must be STRICT, LENIENT, or OFF"
+            handleFailure(
+                new IllegalArgumentException(
+                    "validationMode must be STRICT, LENIENT, or OFF"
+                ),
+                Dt3ErrorPhase.CONFIGURATION,
+                false
             );
+            return;
         }
 
-        Map<String, Object> maskedEvent = maskingEngine.mask(event);
-        List<String> maskedFields = maskingEngine.getMaskedFields();
+        Map<String, Object> maskedEvent;
+        try {
+            maskedEvent = maskingEngine.mask(event);
+        } catch (RuntimeException exception) {
+            handleFailure(exception, Dt3ErrorPhase.MASKING, false);
+            return;
+        }
 
+        List<String> maskedFields = maskingEngine.getMaskedFields();
         if (!maskedFields.isEmpty()) {
             maskedEvent.put("dt3.security.masked_fields", maskedFields);
         }
 
-        List<Validator.ValidationErrorDetail> validationErrors = eventValidator.apply(
-            maskedEvent,
-            validationMode
-        );
+        List<Validator.ValidationErrorDetail> validationErrors;
+        try {
+            validationErrors = eventValidator.apply(maskedEvent, validationMode);
+        } catch (LogEventValidationException exception) {
+            // Strict validation rejection is never converted to a success by
+            // fail_open; this preserves the established validation contract.
+            handleFailure(exception, Dt3ErrorPhase.VALIDATION, true);
+            return;
+        } catch (RuntimeException exception) {
+            handleFailure(exception, Dt3ErrorPhase.VALIDATION, false);
+            return;
+        }
+
         if (!validationErrors.isEmpty() && validationMode == ValidationMode.LENIENT) {
             maskedEvent.put(
                 "dt3.validation.errors",
@@ -328,8 +389,10 @@ public final class StdoutLogger implements Logger {
             } else {
                 writeFinalEvent(maskedEvent);
             }
-        } catch (HttpTransportError | OtlpTransportError | IllegalStateException exception) {
-            handleTransportFailure(exception);
+        } catch (Dt3SdkException exception) {
+            handleFailure(exception, exception.getPhase(), false);
+        } catch (RuntimeException exception) {
+            handleFailure(exception, Dt3ErrorPhase.DELIVERY, false);
         }
     }
 
@@ -446,9 +509,23 @@ public final class StdoutLogger implements Logger {
     }
 
     private void handleTransportFailure(RuntimeException exception) {
-        if (!config.isFailOpen()) {
+        handleFailure(exception, Dt3ErrorPhase.DELIVERY, false);
+    }
+
+    private void handleFailure(
+        RuntimeException exception,
+        Dt3ErrorPhase phase,
+        boolean alwaysThrow
+    ) {
+        if (alwaysThrow) {
+            errorHandler.report(exception, phase);
             throw exception;
         }
+        errorHandler.handle(exception, phase);
+    }
+
+    private void handleTimerBatchFailure(RuntimeException exception) {
+        errorHandler.report(exception, Dt3ErrorPhase.BATCHING);
     }
 
     private Map<String, Object> createEvent(
@@ -457,9 +534,6 @@ public final class StdoutLogger implements Logger {
         Map<String, Object> context,
         Throwable error
     ) {
-        // Scoped values are applied before explicit per-event context so callers
-        // can override trace/correlation fields for a single event. Logger-owned
-        // fields remain reasserted below after both context sources are merged.
         Map<String, Object> safeContext = new LinkedHashMap<>(LogContext.activeValues());
         if (context != null) {
             safeContext.putAll(context);
@@ -484,7 +558,6 @@ public final class StdoutLogger implements Logger {
             event.put("deployment.environment", config.getDeploymentEnvironment());
         }
         event.putAll(safeContext);
-        // Reassert every logger-owned field after context merging.
         event.put("timestamp", event.get("timestamp"));
         event.put("severity", severity);
         event.put("message", message);
@@ -505,8 +578,14 @@ public final class StdoutLogger implements Logger {
 
         if (error != null) {
             event.put("error.type", error.getClass().getSimpleName());
-            event.put("error.message", error.getMessage());
-            event.put("error.stack", stackTrace(error));
+            event.put("error.message", valueOrDefault(error.getMessage(), ""));
+            if (error instanceof Dt3SdkException sdkError) {
+                event.put("error.code", sdkError.getCode().getValue());
+                event.put("error.retryable", sdkError.isRetryable());
+            } else {
+                event.put("error.code", Dt3ErrorCode.UNKNOWN.getValue());
+                event.put("error.retryable", false);
+            }
         }
 
         return event;
@@ -544,13 +623,22 @@ public final class StdoutLogger implements Logger {
         if (config.isAutoGenerateCorrelationId()) {
             String generatedCorrelationId = UUID.randomUUID().toString();
             String scopedCorrelationId = LogContext.establishCorrelationId(generatedCorrelationId);
-            context.put("correlation.id", scopedCorrelationId == null ? generatedCorrelationId : scopedCorrelationId);
+            context.put(
+                "correlation.id",
+                scopedCorrelationId == null ? generatedCorrelationId : scopedCorrelationId
+            );
         }
     }
 
     private void ensureOpen() {
         if (closed) {
-            throw new IllegalStateException("Logger is closed");
+            Dt3SdkException exception = new Dt3SdkException(
+                "Logger is closed",
+                Dt3ErrorCode.LIFECYCLE_CLOSED,
+                false,
+                Dt3ErrorPhase.LIFECYCLE
+            );
+            handleFailure(exception, Dt3ErrorPhase.LIFECYCLE, true);
         }
     }
 
@@ -564,22 +652,10 @@ public final class StdoutLogger implements Logger {
         }
     }
 
-    private void putIfAbsentConfigured(Map<String, Object> event, String field, String value) {
-        if (value != null) {
-            event.putIfAbsent(field, value);
-        }
-    }
-
     private void removeIfNotConfigured(Map<String, Object> event, String field, String value) {
         if (value == null) {
             event.remove(field);
         }
-    }
-
-    private String stackTrace(Throwable error) {
-        StringWriter writer = new StringWriter();
-        error.printStackTrace(new PrintWriter(writer));
-        return writer.toString();
     }
 
     static String toJson(Object value) {

@@ -6,8 +6,8 @@ import { Dt3Error, Dt3ErrorCode, Dt3ErrorPhase } from './errors';
 export interface Dt3ErrorReport {
   readonly code: Dt3ErrorCode;
   readonly phase: Dt3ErrorPhase;
-  readonly message: string;
   readonly retryable: boolean;
+  readonly type: string;
   readonly error: unknown;
   readonly occurrences: number;
 }
@@ -39,8 +39,8 @@ export class ErrorHandler {
   private readonly failOpen: boolean;
   private readonly diagnosticsEnabled: boolean;
   private readonly writeDiagnosticLine: (line: string) => void;
-  private readonly includeStack: boolean;
   private readonly rateLimitPerMinute: number;
+  private readonly includeStack: boolean;
   private readonly onError?: OnErrorCallback;
   private readonly counts = new Map<Dt3ErrorCode, number>();
   private readonly windowStart = new Map<Dt3ErrorCode, number>();
@@ -93,8 +93,8 @@ export class ErrorHandler {
     const report: Dt3ErrorReport = {
       code,
       phase,
-      message: ErrorHandler.messageFor(error),
       retryable,
+      type: ErrorHandler.typeFor(error),
       error,
       occurrences,
     };
@@ -208,8 +208,10 @@ export class ErrorHandler {
       return { code: Dt3ErrorCode.TransportUnavailable, retryable: true };
     }
 
-    if (nodeCode === 'EACCES' || nodeCode === 'ENOENT') {
-      return { code: Dt3ErrorCode.TransportUnavailable, retryable: false };
+    if (nodeCode === 'EACCES' || nodeCode === 'ENOENT' || nodeCode === 'EISDIR' || nodeCode === 'ENOSPC') {
+      // Permission, path, directory-target, and storage-exhaustion failures
+      // require configuration or environmental remediation before retrying.
+      return { code: Dt3ErrorCode.FileWriteFailed, retryable: false };
     }
 
     return { code: Dt3ErrorCode.Unknown, retryable: false };
@@ -247,13 +249,12 @@ export class ErrorHandler {
   private writeDiagnostic(report: Dt3ErrorReport, context: Record<string, string>): void {
     const labels = Object.entries(context)
       .sort(([left], [right]) => left.localeCompare(right))
-      .map(([key, value]) => `${key}=${value}`)
+      .map(([key, value]) => `${ErrorHandler.sanitizeDiagnosticLabel(key)}=${ErrorHandler.sanitizeDiagnosticLabel(value)}`)
       .join(' ');
-    const type = report.error instanceof Error ? report.error.name : typeof report.error;
     let line =
       `[dt3-sdk] level=error code=${report.code} phase=${report.phase} ` +
       `retryable=${report.retryable} occurrences=${report.occurrences} ` +
-      `type=${type} message=${JSON.stringify(report.message)}`;
+      `type=${report.type}`;
 
     if (labels) {
       line = `${line} ${labels}`;
@@ -270,8 +271,8 @@ export class ErrorHandler {
     }
   }
 
-  private static messageFor(error: unknown): string {
-    return error instanceof Error ? error.message : String(error);
+  private static typeFor(error: unknown): string {
+    return error instanceof Error ? error.name : typeof error;
   }
 
   private static nodeCodeFor(error: unknown): string | undefined {
@@ -281,5 +282,9 @@ export class ErrorHandler {
 
     const code = (error as { code?: unknown }).code;
     return typeof code === 'string' ? code : undefined;
+  }
+
+  private static sanitizeDiagnosticLabel(value: string): string {
+    return value.replace(/[\r\n=]/g, '_');
   }
 }

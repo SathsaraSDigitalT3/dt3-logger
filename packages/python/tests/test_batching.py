@@ -357,8 +357,8 @@ def test_fail_closed_batch_failure_reports_discarded_events_and_rejects_later_lo
         Dt3ErrorCode.BATCH_ABORTED,
         Dt3ErrorCode.BATCH_ABORTED,
     ]
-    assert reports[1].error.details["discarded_count"] == 2
-    assert reports[2].error.details["discarded_count"] == 1
+    assert [report.occurrences for report in reports] == [1, 1, 2]
+    assert [report.error_type for report in reports[1:]] == ["Dt3Error", "Dt3Error"]
 
 
 @pytest.mark.parametrize(

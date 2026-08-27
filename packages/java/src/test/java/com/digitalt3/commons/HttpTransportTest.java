@@ -4,6 +4,9 @@ import com.digitalt3.commons.api.Logger;
 import com.digitalt3.commons.api.LoggerFactory;
 import com.digitalt3.commons.api.SdkConfig;
 import com.digitalt3.commons.api.ValidationMode;
+import com.digitalt3.commons.sdk.Dt3ErrorCode;
+import com.digitalt3.commons.sdk.Dt3ErrorPhase;
+import com.digitalt3.commons.sdk.Dt3SdkException;
 import com.digitalt3.commons.sdk.HttpTransportError;
 import com.digitalt3.commons.sdk.LogEventValidationException;
 import com.sun.net.httpserver.HttpExchange;
@@ -254,11 +257,18 @@ public class HttpTransportTest {
         logger.close();
         logger.close();
 
-        assertThrows(
-            IllegalStateException.class,
+        Dt3SdkException exportException = assertThrows(
+            Dt3SdkException.class,
             () -> logger.info("Closed logger", Map.of("event.name", "CLOSED_LOGGER_EVENT"))
         );
-        assertThrows(IllegalStateException.class, logger::flush);
+        assertEquals(Dt3ErrorCode.LIFECYCLE_CLOSED, exportException.getCode());
+        assertEquals(Dt3ErrorPhase.LIFECYCLE, exportException.getPhase());
+        assertFalse(exportException.isRetryable());
+
+        Dt3SdkException flushException = assertThrows(Dt3SdkException.class, logger::flush);
+        assertEquals(Dt3ErrorCode.LIFECYCLE_CLOSED, flushException.getCode());
+        assertEquals(Dt3ErrorPhase.LIFECYCLE, flushException.getPhase());
+        assertFalse(flushException.isRetryable());
     }
 
     private SdkConfig httpConfig(String endpoint, boolean failOpen, long timeout) {

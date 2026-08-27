@@ -115,7 +115,9 @@ public class JavaSdkEndToEndTest {
         assertTrue(error.contains("\"event.name\":\"ERROR_EVENT\""));
         assertTrue(error.contains("\"error.type\":\"IllegalStateException\""));
         assertTrue(error.contains("\"error.message\":\"Something went wrong\""));
-        assertTrue(error.contains("\"error.stack\""));
+        assertTrue(error.contains("\"error.code\":\"DT3_UNKNOWN\""));
+        assertTrue(error.contains("\"error.retryable\":false"));
+        assertFalse(error.contains("\"error.stack\""));
 
         assertEquals("secret123", sensitiveContext.get("password"));
         assertEquals(

@@ -2,6 +2,7 @@ import { appendFileSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 
 import { LogEvent } from '../api/types';
+import { Dt3ConfigurationError } from './errors';
 
 /**
  * Append final DT3 structured log events to a configured UTF-8 JSON Lines file.
@@ -17,7 +18,9 @@ export class FileTransport {
    */
   constructor(filePath: string) {
     if (filePath.trim().length === 0) {
-      throw new Error('exporter.file.path must be configured for the file exporter');
+      throw new Dt3ConfigurationError(
+        'exporter.file.path must be configured for the file exporter',
+      );
     }
 
     this.filePath = filePath;

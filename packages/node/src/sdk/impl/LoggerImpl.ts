@@ -44,7 +44,20 @@ export class LoggerImpl implements Logger {
    * @param config - Service metadata, exporter, masking, validation, and batching configuration.
    */
   constructor(config: Record<string, unknown>) {
-    this.config = config;
+    const constructionHandler = new ErrorHandler({
+      failOpen: true,
+      diagnosticsEnabled: config['error.diagnostics.enabled'] !== false,
+      includeStack: config['error.include_stack'] === true,
+      // Construction diagnostics must remain available even when the supplied
+      // rate-limit setting is itself invalid and causes initialization to fail.
+      rateLimitPerMinute: 20,
+      onError:
+        typeof config['error.on_error'] === 'function'
+          ? (config['error.on_error'] as OnErrorCallback)
+          : undefined,
+    });
+    try {
+      this.config = config;
     this.exporter = typeof config.exporter === 'string' ? config.exporter : 'stdout';
     this.failOpen = this.requireBoolean(config.fail_open ?? true, 'fail_open');
     this.errorHandler = new ErrorHandler({
@@ -110,7 +123,7 @@ export class LoggerImpl implements Logger {
     });
     this.validator = new LogEventValidator();
 
-    if (this.requireBoolean(config['batching.enabled'] ?? false, 'batching.enabled')) {
+      if (this.requireBoolean(config['batching.enabled'] ?? false, 'batching.enabled')) {
       const maxSize = this.resolveBatchingNumber(config['batching.max_size'], 'batching.max_size', 100);
       const flushIntervalMs = this.resolveBatchingNumber(
         config['batching.flush_interval_ms'],
@@ -118,12 +131,18 @@ export class LoggerImpl implements Logger {
         5000,
       );
 
-      this.batcher = new EventBatcher(
+        this.batcher = new EventBatcher(
         (event) => this.exportWithPolicy(event),
         maxSize,
         flushIntervalMs,
         (error) => this.reportBatchingFailure(error),
-      );
+        );
+      }
+    } catch (error) {
+      constructionHandler.report(error, Dt3ErrorPhase.Configuration, {
+        exporter: typeof config.exporter === 'string' ? config.exporter : 'stdout',
+      });
+      throw error;
     }
   }
 

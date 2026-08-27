@@ -5,6 +5,9 @@ import com.digitalt3.commons.api.Logger;
 import com.digitalt3.commons.api.LoggerFactory;
 import com.digitalt3.commons.api.SdkConfig;
 import com.digitalt3.commons.api.Timer;
+import com.digitalt3.commons.sdk.Dt3ErrorCode;
+import com.digitalt3.commons.sdk.Dt3ErrorPhase;
+import com.digitalt3.commons.sdk.Dt3SdkException;
 import org.junit.Test;
 
 import java.io.ByteArrayOutputStream;
@@ -13,6 +16,7 @@ import java.nio.charset.StandardCharsets;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertThrows;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
@@ -171,14 +175,14 @@ public class TimerTest {
     public void closedLoggerRejectsTimerCreationAndUse() {
         Logger closedBeforeCreation = createLogger();
         closedBeforeCreation.close();
-        expectIllegalState(() -> closedBeforeCreation.createTimer("CLOSED_LOGGER_TIMER"));
+        expectLifecycleClosed(() -> closedBeforeCreation.createTimer("CLOSED_LOGGER_TIMER"));
 
         Logger logger = createLogger();
         Timer timer = logger.createTimer("CLOSED_TIMER");
         logger.close();
 
-        expectIllegalState(timer::start);
-        expectIllegalState(timer::stop);
+        expectLifecycleClosed(timer::start);
+        expectLifecycleClosed(timer::stop);
     }
 
     private Logger createLogger() {
@@ -208,6 +212,13 @@ public class TimerTest {
         } catch (IllegalStateException expected) {
             // Expected lifecycle failure.
         }
+    }
+
+    private void expectLifecycleClosed(Runnable action) {
+        Dt3SdkException exception = assertThrows(Dt3SdkException.class, action::run);
+        assertEquals(Dt3ErrorCode.LIFECYCLE_CLOSED, exception.getCode());
+        assertEquals(Dt3ErrorPhase.LIFECYCLE, exception.getPhase());
+        assertTrue(!exception.isRetryable());
     }
 
     private void expectIllegalArgument(Runnable action) {

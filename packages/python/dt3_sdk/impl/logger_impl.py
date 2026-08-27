@@ -38,7 +38,39 @@ class LoggerImpl:
             OSError: If the configured file destination cannot be opened.
         """
         self.config = dict(config)
+        construction_handler = ErrorHandler(
+            fail_open=True,
+            diagnostics_enabled=bool(
+                self.config.get("error.diagnostics.enabled", True)
+            ),
+            include_stack=bool(self.config.get("error.include_stack", False)),
+            # Invalid rate-limit configuration must not prevent reporting the
+            # original construction failure.
+            rate_limit_per_minute=20,
+            on_error=self.config.get("error.on_error"),
+        )
+        try:
+            self._initialize()
+        except BaseException as error:
+            construction_handler.report(
+                error,
+                phase=Dt3ErrorPhase.CONFIGURATION,
+                context={"exporter": self._safe_exporter_name()},
+            )
+            raise
+
+    def _safe_exporter_name(self) -> str:
+        """Return a safe exporter diagnostic without invoking arbitrary __str__ methods."""
+        exporter = self.config.get("exporter", "stdout")
+        return exporter if isinstance(exporter, str) else "invalid"
+
+    def _initialize(self) -> None:
+        """Initialize logger pipeline components after construction reporting is ready."""
         self.exporter = self.config.get("exporter", "stdout")
+        if not isinstance(self.exporter, str):
+            from dt3_sdk.errors import Dt3ConfigurationError
+
+            raise Dt3ConfigurationError("Unsupported exporter type")
         self.validation_mode = str(
             self.config.get("validation.mode", "LENIENT")
         ).upper()
@@ -349,7 +381,15 @@ class LoggerImpl:
     def _ensure_open(self) -> None:
         """Fail lifecycle operations deterministically after the logger closes."""
         if self._closed:
-            raise RuntimeError("Logger is closed")
+            from dt3_sdk.errors import Dt3LifecycleError
+
+            error = Dt3LifecycleError("Logger is closed")
+            self.error_handler.report(
+                error,
+                phase=Dt3ErrorPhase.LIFECYCLE,
+                context={"exporter": self.exporter},
+            )
+            raise error
 
     @staticmethod
     def _require_boolean(value: Any, key: str) -> bool:

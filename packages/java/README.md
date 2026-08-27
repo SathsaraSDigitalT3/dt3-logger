@@ -168,6 +168,12 @@ logger.info("Order created", Map.of("event.name", "ORDER_CREATED"));
 
 The Java `setHttpTimeout(long)` API configures the canonical `exporter.http.timeout` value in milliseconds (default: `5000`). The transport sends each final event synchronously using `POST` with `Content-Type: application/json`. Custom headers are included except an attempted `Content-Type` override, because all exported DT3 events are JSON. Only 2xx responses are successful. Timeouts, connection failures, and non-2xx responses are transport failures; `failOpen` controls whether the logger swallows them (`true`, the default) or propagates `HttpTransportError` (`false`).
 
+## Error reporting contracts
+
+`ErrorHandler` applies the same retryability policy across SDKs. File-write failures, including generic `UncheckedIOException` failures and `FileTransport` write failures, are classified as `DT3_FILE_WRITE_FAILED` and are **not retryable** because permission, path, directory-target, and storage failures require configuration or environmental remediation.
+
+The phase in `ErrorHandler.report(error, phase)` and `handle(error, phase)` is always the caller-supplied handling phase, even for a `Dt3SdkException` that carries its own originating phase. This identifies where the pipeline handled the error. By contrast, `classify(typedError)` has no caller phase and returns the typed exception’s intrinsic phase.
+
 ## OTLP/HTTP JSON Logs exporter
 
 Configure the OTLP exporter with the canonical cross-language properties `exporter = "otlp"`, `otlp.endpoint`, `otlp.timeout`, and `otlp.headers`:

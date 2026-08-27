@@ -35,6 +35,10 @@ public class SdkConfig {
     private int batchingMaxSize = 100;
     private long batchingFlushIntervalMs = 5000;
     private boolean autoGenerateCorrelationId;
+    private boolean errorDiagnosticsEnabled = true;
+    private boolean errorDiagnosticsIncludeStack;
+    private int errorRateLimitPerMinute = 20;
+    private java.util.function.Consumer<com.digitalt3.commons.sdk.Dt3ErrorReport> errorObserver;
 
     // PUBLIC_INTERFACE
     /**
@@ -109,7 +113,22 @@ public class SdkConfig {
             "correlation.auto_generate",
             this::setAutoGenerateCorrelationId
         );
+        setBooleanIfPresent(
+            values,
+            "error.diagnostics.enabled",
+            this::setErrorDiagnosticsEnabled
+        );
+        setBooleanIfPresent(
+            values,
+            "error.diagnostics.include_stack",
+            this::setErrorDiagnosticsIncludeStack
+        );
         setPositiveIntIfPresent(values, "batching.max_size", this::setBatchingMaxSize);
+        setPositiveIntIfPresent(
+            values,
+            "error.rate_limit_per_minute",
+            this::setErrorRateLimitPerMinute
+        );
         setPositiveLongIfPresent(
             values,
             "batching.flush_interval_ms",
@@ -288,7 +307,12 @@ public class SdkConfig {
     public String getSdkVersion() { return sdkVersion; }
     public void setSdkVersion(String sdkVersion) { this.sdkVersion = sdkVersion; }
     public ValidationMode getValidationMode() { return validationMode; }
-    public void setValidationMode(ValidationMode validationMode) { this.validationMode = validationMode; }
+    public void setValidationMode(ValidationMode validationMode) {
+        if (validationMode == null) {
+            throw new IllegalArgumentException("validation mode must not be null");
+        }
+        this.validationMode = validationMode;
+    }
     public boolean isFailOpen() { return failOpen; }
     public void setFailOpen(boolean failOpen) { this.failOpen = failOpen; }
     public String getExporter() { return exporter; }
@@ -475,6 +499,97 @@ public class SdkConfig {
      */
     public void setAutoGenerateCorrelationId(boolean autoGenerateCorrelationId) {
         this.autoGenerateCorrelationId = autoGenerateCorrelationId;
+    }
+
+    // PUBLIC_INTERFACE
+    /**
+     * Return whether SDK-internal failures emit safe direct diagnostics.
+     *
+     * @return {@code true} when diagnostics are written without using the DT3 logger
+     */
+    public boolean isErrorDiagnosticsEnabled() {
+        return errorDiagnosticsEnabled;
+    }
+
+    // PUBLIC_INTERFACE
+    /**
+     * Configure safe direct diagnostic output for SDK-internal failures.
+     *
+     * @param errorDiagnosticsEnabled whether diagnostics should be emitted to stderr
+     */
+    public void setErrorDiagnosticsEnabled(boolean errorDiagnosticsEnabled) {
+        this.errorDiagnosticsEnabled = errorDiagnosticsEnabled;
+    }
+
+    // PUBLIC_INTERFACE
+    /**
+     * Return whether SDK diagnostic output includes exception stack traces.
+     *
+     * @return {@code true} when diagnostic stack traces are enabled
+     */
+    public boolean isErrorDiagnosticsIncludeStack() {
+        return errorDiagnosticsIncludeStack;
+    }
+
+    // PUBLIC_INTERFACE
+    /**
+     * Configure whether safe SDK diagnostics include exception stack traces.
+     *
+     * @param errorDiagnosticsIncludeStack whether diagnostic stack traces are enabled
+     */
+    public void setErrorDiagnosticsIncludeStack(boolean errorDiagnosticsIncludeStack) {
+        this.errorDiagnosticsIncludeStack = errorDiagnosticsIncludeStack;
+    }
+
+    // PUBLIC_INTERFACE
+    /**
+     * Return the maximum number of diagnostics emitted per error code each minute.
+     *
+     * @return positive per-code diagnostic rate limit
+     */
+    public int getErrorRateLimitPerMinute() {
+        return errorRateLimitPerMinute;
+    }
+
+    // PUBLIC_INTERFACE
+    /**
+     * Configure the maximum diagnostics emitted per error code each minute.
+     *
+     * @param errorRateLimitPerMinute positive per-code diagnostic rate limit
+     * @throws IllegalArgumentException when the value is not positive
+     */
+    public void setErrorRateLimitPerMinute(int errorRateLimitPerMinute) {
+        if (errorRateLimitPerMinute <= 0) {
+            throw new IllegalArgumentException(
+                "error.rate_limit_per_minute must be a positive integer"
+            );
+        }
+        this.errorRateLimitPerMinute = errorRateLimitPerMinute;
+    }
+
+    // PUBLIC_INTERFACE
+    /**
+     * Return the optional observer invoked for SDK-internal handled failures.
+     *
+     * @return configured observer, or {@code null} when no observer is configured
+     */
+    public java.util.function.Consumer<com.digitalt3.commons.sdk.Dt3ErrorReport> getErrorObserver() {
+        return errorObserver;
+    }
+
+    // PUBLIC_INTERFACE
+    /**
+     * Configure an optional observer for centralized SDK error reports.
+     *
+     * <p>Observer exceptions are ignored by the SDK to prevent error-reporting
+     * recursion from disrupting application logging.</p>
+     *
+     * @param errorObserver observer, or {@code null} to remove it
+     */
+    public void setErrorObserver(
+        java.util.function.Consumer<com.digitalt3.commons.sdk.Dt3ErrorReport> errorObserver
+    ) {
+        this.errorObserver = errorObserver;
     }
 
     // PUBLIC_INTERFACE

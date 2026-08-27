@@ -4,6 +4,7 @@ import {
   Dt3ErrorCode,
   Dt3ErrorPhase,
   ErrorHandler,
+  EventBatcher,
 } from '../src';
 import type { Logger } from '../src';
 import { createServer } from 'node:http';
@@ -64,6 +65,10 @@ describe('ErrorHandler', () => {
     [new RangeError('maximum call stack size exceeded'), Dt3ErrorCode.MaskingFailed, false],
     [{ code: 'ECONNREFUSED' }, Dt3ErrorCode.TransportUnavailable, true],
     [{ code: 'ETIMEDOUT' }, Dt3ErrorCode.TransportTimeout, true],
+    [{ code: 'EACCES' }, Dt3ErrorCode.FileWriteFailed, false],
+    [{ code: 'ENOENT' }, Dt3ErrorCode.FileWriteFailed, false],
+    [{ code: 'EISDIR' }, Dt3ErrorCode.FileWriteFailed, false],
+    [{ code: 'ENOSPC' }, Dt3ErrorCode.FileWriteFailed, false],
     [new Error('unknown'), Dt3ErrorCode.Unknown, false],
   ])('classifies %p as %s with retryable=%s', (error, code, retryable) => {
     const handler = new ErrorHandler({ diagnosticsEnabled: false });
@@ -73,19 +78,42 @@ describe('ErrorHandler', () => {
 
   it('reports each error to callbacks while rate limiting diagnostics per error code', () => {
     const diagnostics: string[] = [];
-    const reports: string[] = [];
+    const reports: Array<{ code: Dt3ErrorCode; type: string }> = [];
     const handler = new ErrorHandler({
       diagnosticsWrite: (line) => diagnostics.push(line),
       rateLimitPerMinute: 1,
-      onError: (report) => reports.push(report.code),
+      onError: (report) => reports.push({ code: report.code, type: report.type }),
     });
 
-    handler.handle(new Error('first'), Dt3ErrorPhase.Delivery);
-    handler.handle(new Error('second'), Dt3ErrorPhase.Delivery);
+    handler.handle(new Error('sensitive first failure'), Dt3ErrorPhase.Delivery);
+    handler.handle(new Error('sensitive second failure'), Dt3ErrorPhase.Delivery);
 
     expect(diagnostics).toHaveLength(1);
-    expect(reports).toEqual([Dt3ErrorCode.Unknown, Dt3ErrorCode.Unknown]);
+    expect(diagnostics[0]).toContain('code=DT3_UNKNOWN');
+    expect(diagnostics[0]).toContain('type=Error');
+    expect(diagnostics[0]).not.toContain('sensitive first failure');
+    expect(reports).toEqual([
+      { code: Dt3ErrorCode.Unknown, type: 'Error' },
+      { code: Dt3ErrorCode.Unknown, type: 'Error' },
+    ]);
     expect(handler.snapshot()).toEqual({ [Dt3ErrorCode.Unknown]: 2 });
+  });
+
+  it('sanitizes diagnostic context labels to prevent structured diagnostic injection', () => {
+    const diagnostics: string[] = [];
+    const handler = new ErrorHandler({
+      diagnosticsWrite: (line) => diagnostics.push(line),
+    });
+
+    handler.report(new Error('delivery failed'), Dt3ErrorPhase.Delivery, {
+      'request\nid': 'trusted\nvalue=forged',
+    });
+
+    expect(diagnostics).toEqual([
+      expect.stringContaining('request_id=trusted_value_forged'),
+    ]);
+    expect(diagnostics[0]).toHaveLength(diagnostics[0].length);
+    expect(diagnostics[0]).not.toContain('\nvalue=');
   });
 
   it('isolates failing diagnostic sinks and application callbacks in fail-open mode', () => {
@@ -102,16 +130,16 @@ describe('ErrorHandler', () => {
   });
 
   it('rethrows the original error in fail-closed mode after reporting it', () => {
-    const reports: string[] = [];
+    const reports: Array<{ code: Dt3ErrorCode; type: string }> = [];
     const handler = new ErrorHandler({
       failOpen: false,
       diagnosticsEnabled: false,
-      onError: (report) => reports.push(report.message),
+      onError: (report) => reports.push({ code: report.code, type: report.type }),
     });
     const failure = new Error('delivery failed');
 
     expect(() => handler.handle(failure, Dt3ErrorPhase.Delivery)).toThrow(failure);
-    expect(reports).toEqual(['delivery failed']);
+    expect(reports).toEqual([{ code: Dt3ErrorCode.Unknown, type: 'Error' }]);
   });
 });
 
@@ -148,6 +176,26 @@ describe('Logger ErrorHandler integration', () => {
     expect(() => createLogger(loggerConfig({ 'error.rate_limit_per_minute': value }))).toThrow(
       'error.rate_limit_per_minute must be a positive integer',
     );
+  });
+
+  it('reports constructor configuration failures before rethrowing them', () => {
+    const reports: Array<{ code: Dt3ErrorCode; phase: Dt3ErrorPhase }> = [];
+
+    expect(() =>
+      createLogger(
+        loggerConfig({
+          fail_open: 'invalid',
+          'error.on_error': (report: { code: Dt3ErrorCode; phase: Dt3ErrorPhase }) => reports.push(report),
+        }),
+      ),
+    ).toThrow('fail_open must be a boolean');
+
+    expect(reports).toEqual([
+      expect.objectContaining({
+        code: Dt3ErrorCode.ConfigurationInvalid,
+        phase: Dt3ErrorPhase.Configuration,
+      }),
+    ]);
   });
 
   it.each([
@@ -423,5 +471,47 @@ describe('Logger ErrorHandler integration', () => {
 
     expect(() => logger.info('after close', { 'event.name': 'AFTER_CLOSE' })).toThrow('Logger is closed');
     expect(reports).toContain(Dt3ErrorCode.LifecycleClosed);
+  });
+
+  it('classifies direct EventBatcher use after close as a lifecycle failure', () => {
+    const handler = new ErrorHandler({ diagnosticsEnabled: false });
+    const batcher = new EventBatcher(() => undefined, 1, 1000);
+    batcher.close();
+
+    let failure: unknown;
+    try {
+      batcher.add({ message: 'after close' } as never);
+    } catch (error) {
+      failure = error;
+    }
+
+    expect(failure).toBeInstanceOf(Dt3Error);
+    expect(handler.classify(failure)).toEqual({
+      code: Dt3ErrorCode.LifecycleClosed,
+      retryable: false,
+    });
+    expect((failure as Dt3Error).phase).toBe(Dt3ErrorPhase.Lifecycle);
+  });
+
+  it('reports invalid file transport configuration as a configuration failure', () => {
+    const reports: Array<{ code: Dt3ErrorCode; phase: Dt3ErrorPhase }> = [];
+
+    expect(() =>
+      createLogger(
+        loggerConfig({
+          exporter: 'file',
+          'exporter.file.path': '   ',
+          'error.on_error': (report: { code: Dt3ErrorCode; phase: Dt3ErrorPhase }) =>
+            reports.push(report),
+        }),
+      ),
+    ).toThrow('exporter.file.path must be configured for the file exporter');
+
+    expect(reports).toEqual([
+      expect.objectContaining({
+        code: Dt3ErrorCode.ConfigurationInvalid,
+        phase: Dt3ErrorPhase.Configuration,
+      }),
+    ]);
   });
 });

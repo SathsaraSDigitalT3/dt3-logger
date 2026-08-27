@@ -110,15 +110,30 @@ public final class OtlpTransport implements LogTransport {
             );
             int status = response.statusCode();
             if (status < 200 || status >= 300) {
-                throw new OtlpTransportError("OTLP export failed with status " + status);
+                throw new OtlpTransportError(status);
             }
         } catch (java.net.http.HttpTimeoutException exception) {
-            throw new OtlpTransportError("OTLP export request timed out", exception);
+            throw new OtlpTransportError(
+                "OTLP export request timed out",
+                exception,
+                Dt3ErrorCode.TRANSPORT_TIMEOUT,
+                true
+            );
         } catch (InterruptedException exception) {
             Thread.currentThread().interrupt();
-            throw new OtlpTransportError("OTLP export request interrupted", exception);
+            throw new OtlpTransportError(
+                "OTLP export request interrupted",
+                exception,
+                Dt3ErrorCode.TRANSPORT_UNAVAILABLE,
+                true
+            );
         } catch (IOException exception) {
-            throw new OtlpTransportError("OTLP export request failed", exception);
+            throw new OtlpTransportError(
+                "OTLP export request failed",
+                exception,
+                Dt3ErrorCode.TRANSPORT_UNAVAILABLE,
+                true
+            );
         }
     }
 
