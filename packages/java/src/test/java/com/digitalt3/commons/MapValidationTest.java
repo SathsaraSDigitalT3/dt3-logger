@@ -383,6 +383,8 @@ public class MapValidationTest {
         config.setServiceVersion("1.0.0");
         config.setDeploymentEnvironment("test");
         config.setValidationMode(validationMode);
+        // Preserve invalid caller-supplied trace/span values for type diagnostics.
+        config.setTracingAutoGenerateIds(false);
         return config;
     }
 

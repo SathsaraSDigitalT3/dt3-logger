@@ -1,4 +1,6 @@
 import { Timer, TimerContext } from './Timer';
+import { EventSink } from './EventSink';
+import { Tracer } from './Tracer';
 import { LogContext, LogEvent } from './types';
 
 export interface Logger {
@@ -68,6 +70,23 @@ export interface Logger {
    * @returns A snapshot of handled-error counts since logger construction.
    */
   errorSnapshot?: () => Record<string, number>;
+
+  // PUBLIC_INTERFACE
+  /**
+   * Optionally register an additional export sink for fan-out.
+   *
+   * @param sink - Destination that receives processed events.
+   * @param name - Optional diagnostic label for failure isolation.
+   */
+  registerSink?(sink: EventSink, name?: string): void;
+
+  // PUBLIC_INTERFACE
+  /**
+   * Optionally create a lightweight tracer bound to this logger.
+   *
+   * @returns A tracer that scopes W3C ids into log context.
+   */
+  createTracer?(): Tracer;
 
   /**
    * Close the logger and prevent future logging or flush operations.

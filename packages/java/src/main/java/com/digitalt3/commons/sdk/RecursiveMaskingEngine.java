@@ -39,7 +39,11 @@ public final class RecursiveMaskingEngine implements MaskingEngine {
         "nic",
         "national_id",
         "email",
-        "phone"
+        "phone",
+        "prompt",
+        "response",
+        "kavia.prompt",
+        "kavia.response"
     );
 
     private static final String DEFAULT_REPLACEMENT = "[REDACTED]";

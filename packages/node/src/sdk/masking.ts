@@ -25,6 +25,10 @@ export const DEFAULT_SENSITIVE_FIELDS = [
   'national_id',
   'email',
   'phone',
+  'prompt',
+  'response',
+  'kavia.prompt',
+  'kavia.response',
 ] as const;
 
 /**

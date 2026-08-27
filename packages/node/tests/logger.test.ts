@@ -20,6 +20,7 @@ const baseConfig = (
   'deployment.environment': 'test',
   exporter: 'stdout',
   'validation.mode': validationMode,
+  'tracing.auto_generate_ids': false,
   ...overrides,
 });
 
@@ -353,7 +354,7 @@ describe('File transport', () => {
         severity: 'INFO',
         message: 'File transport started',
         'event.name': 'FILE_TRANSPORT_STARTED',
-        'schema.version': '1.0.0',
+        'schema.version': '1.1.0',
         'sdk.name': '@digitalt3/commons',
         'sdk.version': '0.1.0',
         'service.name': 'test-service',
@@ -459,7 +460,7 @@ describe('HTTP transport', () => {
         severity: 'INFO',
         message: 'HTTP transport started',
         'event.name': 'HTTP_TRANSPORT_STARTED',
-        'schema.version': '1.0.0',
+        'schema.version': '1.1.0',
         'sdk.name': '@digitalt3/commons',
         'sdk.version': '0.1.0',
         'service.name': 'test-service',

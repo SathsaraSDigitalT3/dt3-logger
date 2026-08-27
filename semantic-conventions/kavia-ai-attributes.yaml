@@ -1,0 +1,96 @@
+attributes:
+  - name: kavia.provider
+    type: string
+    description: AI model provider
+    required: false
+    source: Kavia
+  - name: kavia.model
+    type: string
+    description: Model identifier
+    required: false
+    source: Kavia
+  - name: kavia.model.version
+    type: string
+    description: Model version
+    required: false
+    source: Kavia
+  - name: kavia.prompt
+    type: string
+    description: Prompt payload (sensitive)
+    required: false
+    source: Kavia
+  - name: kavia.response
+    type: string
+    description: Response payload (sensitive)
+    required: false
+    source: Kavia
+  - name: kavia.tokens.prompt
+    type: integer
+    description: Prompt token count
+    required: false
+    source: Kavia
+  - name: kavia.tokens.completion
+    type: integer
+    description: Completion token count
+    required: false
+    source: Kavia
+  - name: kavia.tokens.total
+    type: integer
+    description: Total token count
+    required: false
+    source: Kavia
+  - name: kavia.latency.ms
+    type: number
+    description: Model latency in milliseconds
+    required: false
+    source: Kavia
+  - name: kavia.cost
+    type: number
+    description: Estimated cost
+    required: false
+    source: Kavia
+  - name: kavia.context_window.size
+    type: integer
+    description: Context window size
+    required: false
+    source: Kavia
+  - name: kavia.memory.bytes
+    type: integer
+    description: Memory bytes
+    required: false
+    source: Kavia
+  - name: kavia.conversation.id
+    type: string
+    description: Conversation identifier
+    required: false
+    source: Kavia
+  - name: kavia.agent.id
+    type: string
+    description: Agent identifier
+    required: false
+    source: Kavia
+  - name: kavia.request.id
+    type: string
+    description: AI request/response correlation id
+    required: false
+    source: Kavia
+  - name: kavia.finish_reason
+    type: string
+    description: Finish reason
+    required: false
+    source: Kavia
+  - name: kavia.cache.hit
+    type: boolean
+    description: Cache hit indicator
+    required: false
+    source: Kavia
+  - name: kavia.temperature
+    type: number
+    description: Sampling temperature
+    required: false
+    source: Kavia
+  - name: kavia.max_tokens
+    type: integer
+    description: Max tokens setting
+    required: false
+    source: Kavia

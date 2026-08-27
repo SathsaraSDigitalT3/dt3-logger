@@ -27,6 +27,9 @@ public class CrossLanguageFixtureAdapterTest {
     public void javaValidatorMatchesSharedCrossLanguageFixtures() throws IOException {
         for (String fixtureName : List.of(
             "validation-valid-canonical-event.json",
+            "validation-valid-identity-fields.json",
+            "validation-valid-api-event.json",
+            "validation-valid-ai-event.json",
             "validation-missing-required-field.json",
             "validation-invalid-field-rules.json"
         )) {

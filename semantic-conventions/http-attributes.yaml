@@ -1,0 +1,21 @@
+attributes:
+  - name: http.request.method
+    type: string
+    description: HTTP request method
+    required: false
+    source: OTel
+  - name: http.route
+    type: string
+    description: Matched HTTP route template
+    required: false
+    source: OTel
+  - name: http.target
+    type: string
+    description: HTTP request target
+    required: false
+    source: OTel
+  - name: http.response.status_code
+    type: integer
+    description: HTTP response status code
+    required: false
+    source: OTel

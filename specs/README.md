@@ -16,6 +16,10 @@ This directory contains language-neutral platform contracts that serve as the **
 | `config.yaml` | SDK configuration standard |
 | `workers.yaml` | Worker/job processing standard |
 | `versioning.yaml` | Versioning and compatibility standard |
+| `api-events.yaml` | API/HTTP typed event contracts |
+| `database-events.yaml` | Database typed event contracts |
+| `messaging-events.yaml` | Messaging/worker typed event contracts |
+| `ai-events.yaml` | AI observability event hierarchy |
 
 ## Rules
 

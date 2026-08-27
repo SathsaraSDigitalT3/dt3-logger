@@ -25,6 +25,9 @@ const loadFixture = (fixtureName: string): ValidationFixture =>
 describe('cross-language validation fixture adapter', () => {
   it.each([
     'validation-valid-canonical-event.json',
+    'validation-valid-identity-fields.json',
+    'validation-valid-api-event.json',
+    'validation-valid-ai-event.json',
     'validation-missing-required-field.json',
     'validation-invalid-field-rules.json',
   ])('matches the portable validation contract from %s', (fixtureName) => {

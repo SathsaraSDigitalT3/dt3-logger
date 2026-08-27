@@ -16,6 +16,8 @@ schema_versioning:
   - Schema changes must be backward compatible within a MAJOR version
   - New optional fields are a MINOR change
   - Removing or renaming fields is a MAJOR change
+  - Current canonical log-event schema version: 1.1.0
+  - 1.1.0 MINOR additions: event.id, operation.id, component.name; domain/AI attribute catalogs
 
 sdk_versioning:
   - Each language SDK has its own version

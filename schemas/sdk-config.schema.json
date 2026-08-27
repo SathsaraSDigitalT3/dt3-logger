@@ -21,10 +21,14 @@
     },
     "schema.version": {
       "type": "string",
-      "default": "1.0.0"
+      "default": "1.1.0"
     },
     "sdk.name": { "type": "string" },
     "sdk.version": { "type": "string" },
+    "component.name": {
+      "type": "string",
+      "description": "Default component/module name for events"
+    },
     "validation.mode": {
       "type": "string",
       "enum": ["STRICT", "LENIENT", "OFF"],
@@ -36,8 +40,16 @@
     },
     "exporter": {
       "type": "string",
-      "enum": ["stdout", "file", "http", "otlp"],
+      "enum": ["stdout", "file", "http", "otlp", "kafka", "eventhub"],
       "default": "stdout"
+    },
+    "exporters": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": ["stdout", "file", "http", "otlp", "kafka", "eventhub"]
+      },
+      "description": "Multiple exporters for fan-out; takes precedence over exporter"
     },
     "exporter.file.path": { "type": "string" },
     "exporter.http.endpoint": { "type": "string" },
@@ -47,6 +59,19 @@
       "description": "HTTP request timeout in milliseconds"
     },
     "exporter.http.headers": {
+      "type": "object",
+      "additionalProperties": { "type": "string" }
+    },
+    "exporter.kafka.topic": { "type": "string" },
+    "exporter.kafka.rest_endpoint": { "type": "string" },
+    "exporter.kafka.timeout": { "type": "integer", "default": 10000 },
+    "exporter.kafka.headers": {
+      "type": "object",
+      "additionalProperties": { "type": "string" }
+    },
+    "exporter.eventhub.endpoint": { "type": "string" },
+    "exporter.eventhub.timeout": { "type": "integer", "default": 10000 },
+    "exporter.eventhub.headers": {
       "type": "object",
       "additionalProperties": { "type": "string" }
     },
@@ -63,6 +88,19 @@
     },
     "batching.enabled": { "type": "boolean", "default": false },
     "batching.max_size": { "type": "integer", "default": 100 },
-    "batching.flush_interval_ms": { "type": "integer", "default": 5000 }
+    "batching.flush_interval_ms": { "type": "integer", "default": 5000 },
+    "tracing.auto_generate_correlation_id": {
+      "type": "boolean",
+      "default": false
+    },
+    "tracing.span_events.enabled": {
+      "type": "boolean",
+      "default": true
+    },
+    "tracing.auto_generate_ids": {
+      "type": "boolean",
+      "default": true,
+      "description": "Auto-generate W3C trace.id and span.id when absent"
+    }
   }
 }

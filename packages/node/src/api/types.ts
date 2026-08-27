@@ -97,6 +97,14 @@ export interface LogEvent {
   /** Deployment environment (e.g. production, staging). */
   'deployment.environment': string;
 
+  /* ---- Identity fields (optional) ---- */
+  /** Unique event identifier; auto-generated when absent. */
+  'event.id'?: string;
+  /** Business/operation identifier distinct from span.id. */
+  'operation.id'?: string;
+  /** Emitting module or component name. */
+  'component.name'?: string;
+
   /* ---- Distributed-tracing fields (optional) ---- */
   'trace.id'?: string;
   'span.id'?: string;
@@ -182,8 +190,11 @@ export interface SdkConfig {
   /** Deployment environment, e.g. production / staging / development (required). */
   'deployment.environment': string;
 
-  /** Schema version string. Defaults to `'1.0.0'`. */
+  /** Schema version string. Defaults to `'1.1.0'`. */
   'schema.version'?: string;
+
+  /** Default component/module name attached to events when absent. */
+  'component.name'?: string;
 
   /** SDK identifier. Defaults to `'@digitalt3/commons'`. */
   'sdk.name'?: string;
@@ -209,8 +220,13 @@ export interface SdkConfig {
   /** Optional callback invoked for each handled SDK-internal error report. */
   'error.on_error'?: (report: unknown) => void;
 
-  /** Exporter backend: `'stdout'`, `'file'`, `'http'`, `'otlp'`. Defaults to `'stdout'`. */
+  /** Exporter backend: `'stdout'`, `'file'`, `'http'`, `'otlp'`, `'kafka'`, `'eventhub'`. Defaults to `'stdout'`. */
   exporter?: string;
+
+  /**
+   * Multiple built-in exporters for fan-out. When set, takes precedence over `exporter`.
+   */
+  exporters?: string[];
 
   /** File path when exporter is `'file'`. */
   'exporter.file.path'?: string;
@@ -226,6 +242,27 @@ export interface SdkConfig {
 
   /** Optional HTTP request headers for the HTTP exporter. */
   'exporter.http.headers'?: Headers;
+
+  /** Kafka topic when exporter is `'kafka'`. */
+  'exporter.kafka.topic'?: string;
+
+  /** Kafka REST Proxy base URL when exporter is `'kafka'`. */
+  'exporter.kafka.rest_endpoint'?: string;
+
+  /** Kafka REST timeout in milliseconds. Defaults to `10000`. */
+  'exporter.kafka.timeout'?: number;
+
+  /** Optional headers for Kafka REST export. */
+  'exporter.kafka.headers'?: Headers;
+
+  /** Azure Event Hubs HTTPS messages URL when exporter is `'eventhub'`. */
+  'exporter.eventhub.endpoint'?: string;
+
+  /** Event Hub timeout in milliseconds. Defaults to `10000`. */
+  'exporter.eventhub.timeout'?: number;
+
+  /** Optional headers for Event Hub export (e.g. SAS). */
+  'exporter.eventhub.headers'?: Headers;
 
   /** OTLP/HTTP Logs endpoint when exporter is `'otlp'`. */
   'otlp.endpoint'?: string;
@@ -253,4 +290,13 @@ export interface SdkConfig {
 
   /** Generate a UUID correlation ID when a scoped value is absent. Defaults to `false`. */
   'tracing.auto_generate_correlation_id'?: boolean;
+
+  /** Emit span completion LogEvents when spans end. Defaults to `true`. */
+  'tracing.span_events.enabled'?: boolean;
+
+  /**
+   * Auto-generate W3C `trace.id` and `span.id` when absent so every event
+   * carries distributed-trace identifiers. Defaults to `true`.
+   */
+  'tracing.auto_generate_ids'?: boolean;
 }

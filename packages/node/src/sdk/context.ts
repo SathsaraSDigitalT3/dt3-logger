@@ -195,3 +195,22 @@ export function ensureCorrelationId(
 export function getActiveLogContext(): CanonicalLogContext {
   return { ...(activeLogContext.getStore() ?? {}) };
 }
+
+/**
+ * Activate a log context for the current async resource and return a restore function.
+ *
+ * Used by span start/end to enter and leave scoped trace identifiers without a
+ * callback wrapper. Prefer {@link withLogContext} when a callback boundary exists.
+ *
+ * @param context - Trace, correlation, tenant, and schema-compatible context values.
+ * @returns A function that restores the previous context snapshot.
+ */
+export function activateLogContext(context: LogContext | PropagationContext): () => void {
+  const parentContext = { ...(activeLogContext.getStore() ?? {}) };
+  const scopedContext = { ...parentContext, ...canonicalizeContext(context) };
+  activeLogContext.enterWith(scopedContext);
+
+  return () => {
+    activeLogContext.enterWith(parentContext);
+  };
+}

@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://digitalt3.com/schemas/log-event/1.0.0",
+  "$id": "https://digitalt3.com/schemas/log-event/1.1.0",
   "title": "DT3 Commons Log Event",
-  "description": "Canonical structured log event for the DT3 Commons Platform SDK",
+  "description": "Canonical structured log event for the DT3 Commons Platform SDK (schema 1.1.0)",
   "type": "object",
   "required": [
     "timestamp",
@@ -36,6 +36,18 @@
       "type": "string",
       "pattern": "^[A-Z][A-Z0-9_]*$",
       "description": "Structured event name in UPPER_SNAKE_CASE"
+    },
+    "event.id": {
+      "type": "string",
+      "description": "Unique event identifier (UUID); auto-generated when absent"
+    },
+    "operation.id": {
+      "type": "string",
+      "description": "Business/operation identifier distinct from span.id"
+    },
+    "component.name": {
+      "type": "string",
+      "description": "Emitting module or component name"
     },
     "schema.version": {
       "type": "string",

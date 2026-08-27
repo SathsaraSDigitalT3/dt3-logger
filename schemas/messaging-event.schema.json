@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://digitalt3.com/schemas/messaging-event/1.0.0",
+  "title": "DT3 Commons Messaging Event Attributes",
+  "description": "Well-known messaging/worker attributes for canonical LogEvents",
+  "type": "object",
+  "properties": {
+    "event.name": {
+      "type": "string",
+      "enum": [
+        "WORKER_JOB_RECEIVED",
+        "WORKER_JOB_STARTED",
+        "WORKER_JOB_COMPLETED",
+        "WORKER_JOB_FAILED",
+        "WORKER_JOB_RETRIED",
+        "MESSAGING_PUBLISH",
+        "MESSAGING_RECEIVE"
+      ]
+    },
+    "messaging.system": { "type": "string" },
+    "messaging.destination": { "type": "string" },
+    "messaging.operation": { "type": "string" },
+    "messaging.message.id": { "type": "string" },
+    "duration.ms": { "type": "number", "minimum": 0 }
+  },
+  "additionalProperties": true
+}

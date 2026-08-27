@@ -71,8 +71,12 @@ class LogEventValidator:
     """Validate log events using the repository's canonical JSON Schema."""
 
     def __init__(self) -> None:
-        """Load and compile the canonical ``log-event.schema.json`` schema."""
-        schema_path = Path(__file__).resolve().parents[3] / "schemas" / "log-event.schema.json"
+        """Load and compile the packaged ``log-event.schema.json`` schema.
+
+        The schema ships inside the ``dt3_sdk`` package so validation works when
+        consumers install a wheel/sdist without the monorepo ``schemas/`` tree.
+        """
+        schema_path = Path(__file__).resolve().with_name("log-event.schema.json")
         with schema_path.open(encoding="utf-8") as schema_file:
             schema = json.load(schema_file)
 

@@ -26,6 +26,9 @@ def _load_fixture(fixture_name: str) -> dict[str, Any]:
     "fixture_name",
     [
         "validation-valid-canonical-event.json",
+        "validation-valid-identity-fields.json",
+        "validation-valid-api-event.json",
+        "validation-valid-ai-event.json",
         "validation-missing-required-field.json",
         "validation-invalid-field-rules.json",
     ],

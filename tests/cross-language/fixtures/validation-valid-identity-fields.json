@@ -1,0 +1,22 @@
+{
+  "purpose": "Canonical event with 1.1.0 identity fields validates successfully.",
+  "event": {
+    "timestamp": "2026-08-27T12:00:00.000Z",
+    "severity": "INFO",
+    "message": "Identity fields present",
+    "event.name": "IDENTITY_CHECK",
+    "event.id": "550e8400-e29b-41d4-a716-446655440000",
+    "operation.id": "op-checkout-42",
+    "component.name": "checkout-service",
+    "schema.version": "1.1.0",
+    "sdk.name": "dt3-cross-language-fixture",
+    "sdk.version": "0.1.0",
+    "service.name": "fixture-service",
+    "service.version": "1.0.0",
+    "deployment.environment": "test"
+  },
+  "expected": {
+    "valid": true,
+    "errors": []
+  }
+}

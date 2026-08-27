@@ -1,0 +1,37 @@
+spec:
+  name: api-events
+  version: "1.0.0"
+  status: stable
+  description: >
+    Typed API/HTTP event contracts for DT3 Commons.
+    Builders produce canonical LogEvent maps with http.* attributes.
+
+event_names:
+  - INCOMING_HTTP
+  - OUTGOING_HTTP
+
+attributes:
+  - name: http.request.method
+    type: string
+    description: HTTP request method (GET, POST, ...)
+    required: false
+  - name: http.route
+    type: string
+    description: Matched route template
+    required: false
+  - name: http.target
+    type: string
+    description: Request target (path + query)
+    required: false
+  - name: http.response.status_code
+    type: integer
+    description: HTTP response status code
+    required: false
+  - name: duration.ms
+    type: number
+    description: Request duration in milliseconds
+    required: false
+
+notes:
+  - Domain builders set event.name and well-known http.* fields on the canonical LogEvent
+  - Remaining metadata may be placed in attributes

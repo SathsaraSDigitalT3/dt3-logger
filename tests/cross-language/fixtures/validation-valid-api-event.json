@@ -1,0 +1,24 @@
+{
+  "purpose": "API/HTTP domain event attributes validate on the canonical log-event schema.",
+  "event": {
+    "timestamp": "2026-08-27T12:00:00.000Z",
+    "severity": "INFO",
+    "message": "Incoming HTTP request completed",
+    "event.name": "INCOMING_HTTP",
+    "event.id": "550e8400-e29b-41d4-a716-446655440001",
+    "schema.version": "1.1.0",
+    "sdk.name": "dt3-cross-language-fixture",
+    "sdk.version": "0.1.0",
+    "service.name": "fixture-service",
+    "service.version": "1.0.0",
+    "deployment.environment": "test",
+    "http.request.method": "GET",
+    "http.route": "/users/{id}",
+    "http.response.status_code": 200,
+    "duration.ms": 12.5
+  },
+  "expected": {
+    "valid": true,
+    "errors": []
+  }
+}

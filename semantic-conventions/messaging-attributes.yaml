@@ -1,0 +1,21 @@
+attributes:
+  - name: messaging.system
+    type: string
+    description: Messaging system name
+    required: false
+    source: OTel
+  - name: messaging.destination
+    type: string
+    description: Topic or queue name
+    required: false
+    source: OTel
+  - name: messaging.operation
+    type: string
+    description: Messaging operation (publish, receive, process)
+    required: false
+    source: OTel
+  - name: messaging.message.id
+    type: string
+    description: Message or job identifier
+    required: false
+    source: OTel

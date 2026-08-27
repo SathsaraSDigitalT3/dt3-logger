@@ -24,3 +24,15 @@ field/rule contract is preserved.
 Fixtures intentionally cover validation inputs only. They do not prescribe
 logger-generated timestamps, SDK identity values, transport behavior, masking,
 or language-specific exception semantics.
+
+## Included fixtures
+
+| File | Coverage |
+|------|----------|
+| `validation-valid-canonical-event.json` | Baseline valid event |
+| `validation-valid-identity-fields.json` | Schema 1.1.0 identity fields |
+| `validation-valid-api-event.json` | HTTP/API attributes |
+| `validation-valid-ai-event.json` | `kavia.*` AI attributes |
+| `validation-missing-required-field.json` | Required field failures |
+| `validation-invalid-field-rules.json` | Pattern/format failures |
+| `otlp-valid-canonical-event.json` | OTLP transport adapter input |

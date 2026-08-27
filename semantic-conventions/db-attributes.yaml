@@ -1,0 +1,21 @@
+attributes:
+  - name: db.system
+    type: string
+    description: Database management system name
+    required: false
+    source: OTel
+  - name: db.operation
+    type: string
+    description: Database operation name
+    required: false
+    source: OTel
+  - name: db.name
+    type: string
+    description: Database name
+    required: false
+    source: OTel
+  - name: db.sql.table
+    type: string
+    description: Primary SQL table name
+    required: false
+    source: OTel

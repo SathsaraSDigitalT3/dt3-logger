@@ -45,4 +45,11 @@ export class FileTransport {
   public flush(): void {
     // No-op: appendFileSync completes each write before returning.
   }
+
+  /**
+   * Close the file transport. Idempotent no-op.
+   */
+  public close(): void {
+    // No-op: appendFileSync does not hold an open file handle.
+  }
 }

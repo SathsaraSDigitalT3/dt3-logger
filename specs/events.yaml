@@ -1,10 +1,13 @@
 spec:
   name: events
-  version: "1.0.0"
+  version: "1.1.0"
   status: stable
   description: >
     Defines the event envelope standard for DT3 Commons.
     Events are the universal unit of observability data.
+    The log pipeline uses schemas/log-event.schema.json exclusively.
+    schemas/event-envelope.schema.json is reserved for async/messaging
+    transport wrappers and is not used by the logger pipeline.
 
 event_envelope:
   required_fields:
@@ -20,6 +23,9 @@ event_envelope:
     - deployment.environment
 
   optional_fields:
+    - event.id
+    - operation.id
+    - component.name
     - trace.id
     - span.id
     - parent.span.id
@@ -43,4 +49,19 @@ event_envelope:
     - Use dot-separated attribute names
     - Align with OpenTelemetry semantic conventions where applicable
     - Use dt3.* namespace for DT3-specific attributes
+    - Use kavia.* namespace for Kavia AI attributes
     - event.name uses UPPER_SNAKE_CASE
+
+  identity_fields:
+    - name: event.id
+      description: Unique event identifier; SDKs auto-generate a UUID when absent
+    - name: operation.id
+      description: Business operation identifier distinct from span.id
+    - name: component.name
+      description: Emitting module or component name
+
+messaging_transport_envelope:
+  schema: schemas/event-envelope.schema.json
+  description: >
+    Snake_case wrapper (event_type, event_version, payload) for async
+    messaging transports. Adapters may wrap a canonical LogEvent as payload.

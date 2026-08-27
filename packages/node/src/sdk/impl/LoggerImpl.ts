@@ -1,5 +1,9 @@
+import { randomBytes, randomUUID } from 'crypto';
+
+import { EventSink } from '../../api/EventSink';
 import { Logger } from '../../api/Logger';
 import { Timer, TimerContext } from '../../api/Timer';
+import { Tracer } from '../../api/Tracer';
 import { Headers, LogContext, LogEvent, Severity, ValidationMode } from '../../api/types';
 import { ErrorHandler, OnErrorCallback } from '../ErrorHandler';
 import { EventBatcher } from '../batching';
@@ -14,10 +18,20 @@ import {
   Dt3LifecycleError,
   Dt3MaskingError,
 } from '../errors';
+import { EventHubTransport, KafkaTransport } from '../KafkaTransport';
 import { MaskingEngine } from '../masking';
+import { MultiSinkFanout } from '../MultiSinkFanout';
 import { OtlpTransport } from '../OtlpTransport';
+import { StdoutSink } from '../StdoutSink';
 import { TimerImpl } from '../Timer';
+import { TracerImpl } from '../Tracer';
 import { LogEventValidator, ValidationError } from '../validation';
+
+const BUILTIN_EXPORTERS = new Set(['stdout', 'file', 'http', 'otlp', 'kafka', 'eventhub']);
+
+function randomBytesHex(byteLength: number): string {
+  return randomBytes(byteLength).toString('hex');
+}
 
 /**
  * Concrete DT3 logger that builds, validates, batches, and exports structured events.
@@ -29,11 +43,14 @@ export class LoggerImpl implements Logger {
   private readonly errorHandler: ErrorHandler;
   private readonly validationMode: ValidationMode;
   private readonly autoGenerateCorrelationId: boolean;
+  private readonly spanEventsEnabled: boolean;
+  private readonly autoGenerateIds: boolean;
   private readonly maskingEngine: MaskingEngine;
   private readonly validator: LogEventValidator;
   private readonly fileTransport?: FileTransport;
   private readonly httpTransport?: HttpTransport;
   private readonly otlpTransport?: OtlpTransport;
+  private readonly fanout: MultiSinkFanout;
   private readonly batcher?: EventBatcher;
   private readonly observedAsyncDeliveryFailures = new WeakSet<object>();
   private closed = false;
@@ -58,84 +75,98 @@ export class LoggerImpl implements Logger {
     });
     try {
       this.config = config;
-    this.exporter = typeof config.exporter === 'string' ? config.exporter : 'stdout';
-    this.failOpen = this.requireBoolean(config.fail_open ?? true, 'fail_open');
-    this.errorHandler = new ErrorHandler({
-      failOpen: this.failOpen,
-      diagnosticsEnabled: config['error.diagnostics.enabled'] !== false,
-      includeStack: config['error.include_stack'] === true,
-      rateLimitPerMinute:
-        config['error.rate_limit_per_minute'] === undefined
-          ? undefined
-          : (config['error.rate_limit_per_minute'] as number),
-      onError:
-        typeof config['error.on_error'] === 'function'
-          ? (config['error.on_error'] as OnErrorCallback)
-          : undefined,
-    });
-    if (!['stdout', 'file', 'http', 'otlp'].includes(this.exporter)) {
-      throw new Dt3ConfigurationError(`Unsupported exporter: ${this.exporter}`);
-    }
+      const exporterNames = this.resolveExporterNames(config);
+      this.exporter = exporterNames.join(',');
+      this.failOpen = this.requireBoolean(config.fail_open ?? true, 'fail_open');
+      this.errorHandler = new ErrorHandler({
+        failOpen: this.failOpen,
+        diagnosticsEnabled: config['error.diagnostics.enabled'] !== false,
+        includeStack: config['error.include_stack'] === true,
+        rateLimitPerMinute:
+          config['error.rate_limit_per_minute'] === undefined
+            ? undefined
+            : (config['error.rate_limit_per_minute'] as number),
+        onError:
+          typeof config['error.on_error'] === 'function'
+            ? (config['error.on_error'] as OnErrorCallback)
+            : undefined,
+      });
 
-    this.fileTransport =
-      this.exporter === 'file'
-        ? new FileTransport(
-            typeof config['exporter.file.path'] === 'string' ? config['exporter.file.path'] : '',
-          )
-        : undefined;
-    this.httpTransport =
-      this.exporter === 'http'
-        ? new HttpTransport(
-            typeof config['exporter.http.endpoint'] === 'string'
-              ? config['exporter.http.endpoint']
-              : '',
-            this.resolveHttpTimeout(config),
-            this.resolveHeaders(config['exporter.http.headers'], 'exporter.http.headers'),
-            (error) => this.observeAsyncDeliveryFailure(error),
-            !this.failOpen,
-          )
-        : undefined;
-    this.otlpTransport =
-      this.exporter === 'otlp'
-        ? new OtlpTransport(
-            typeof config['otlp.endpoint'] === 'string' ? config['otlp.endpoint'] : '',
-            typeof config['otlp.timeout'] === 'number' ? config['otlp.timeout'] : 10000,
-            this.resolveHeaders(config['otlp.headers'], 'otlp.headers'),
-            (error) => this.observeAsyncDeliveryFailure(error),
-            !this.failOpen,
-          )
-        : undefined;
-    this.validationMode = this.resolveValidationMode(config['validation.mode']);
-    this.autoGenerateCorrelationId = this.requireBoolean(
-      config['tracing.auto_generate_correlation_id'] ?? false,
-      'tracing.auto_generate_correlation_id',
-    );
-    this.maskingEngine = new MaskingEngine({
-      sensitiveFields: Array.isArray(config['masking.fields'])
-        ? config['masking.fields'].filter((field): field is string => typeof field === 'string')
-        : undefined,
-      replacementValue:
-        typeof config['masking.replacement_value'] === 'string'
-          ? config['masking.replacement_value']
+      const namedSinks: Array<{ name: string; sink: EventSink }> = [];
+      for (const exporterName of exporterNames) {
+        const sink = this.createBuiltinSink(exporterName, config);
+        namedSinks.push({ name: exporterName, sink });
+
+        if (exporterName === 'file' && sink instanceof FileTransport) {
+          this.fileTransport = sink;
+        } else if (exporterName === 'http' && sink instanceof HttpTransport) {
+          this.httpTransport = sink;
+        } else if (exporterName === 'otlp' && sink instanceof OtlpTransport) {
+          this.otlpTransport = sink;
+        }
+      }
+
+      if (Array.isArray(config.sinks)) {
+        for (const [index, sink] of config.sinks.entries()) {
+          if (!this.isEventSink(sink)) {
+            throw new Dt3ConfigurationError('sinks must contain EventSink instances');
+          }
+          namedSinks.push({ name: `config-sink-${index}`, sink });
+        }
+      }
+
+      this.fanout = new MultiSinkFanout(namedSinks, {
+        onSinkError: (error, sinkName) => {
+          if (this.wasAsyncDeliveryFailureObserved(error)) {
+            return;
+          }
+          this.errorHandler.report(error, Dt3ErrorPhase.Delivery, {
+            sink: sinkName,
+            exporter: this.exporter,
+          });
+        },
+        rethrowFirstError: !this.failOpen,
+      });
+
+      this.validationMode = this.resolveValidationMode(config['validation.mode']);
+      this.autoGenerateCorrelationId = this.requireBoolean(
+        config['tracing.auto_generate_correlation_id'] ?? false,
+        'tracing.auto_generate_correlation_id',
+      );
+      this.spanEventsEnabled = this.requireBoolean(
+        config['tracing.span_events.enabled'] ?? true,
+        'tracing.span_events.enabled',
+      );
+      this.autoGenerateIds = this.requireBoolean(
+        config['tracing.auto_generate_ids'] ?? true,
+        'tracing.auto_generate_ids',
+      );
+      this.maskingEngine = new MaskingEngine({
+        sensitiveFields: Array.isArray(config['masking.fields'])
+          ? config['masking.fields'].filter((field): field is string => typeof field === 'string')
           : undefined,
-      trackMaskedFields: config['masking.track_masked_fields'] === true,
-      enabled: config['masking.enabled'] !== false,
-    });
-    this.validator = new LogEventValidator();
+        replacementValue:
+          typeof config['masking.replacement_value'] === 'string'
+            ? config['masking.replacement_value']
+            : undefined,
+        trackMaskedFields: config['masking.track_masked_fields'] === true,
+        enabled: config['masking.enabled'] !== false,
+      });
+      this.validator = new LogEventValidator();
 
       if (this.requireBoolean(config['batching.enabled'] ?? false, 'batching.enabled')) {
-      const maxSize = this.resolveBatchingNumber(config['batching.max_size'], 'batching.max_size', 100);
-      const flushIntervalMs = this.resolveBatchingNumber(
-        config['batching.flush_interval_ms'],
-        'batching.flush_interval_ms',
-        5000,
-      );
+        const maxSize = this.resolveBatchingNumber(config['batching.max_size'], 'batching.max_size', 100);
+        const flushIntervalMs = this.resolveBatchingNumber(
+          config['batching.flush_interval_ms'],
+          'batching.flush_interval_ms',
+          5000,
+        );
 
         this.batcher = new EventBatcher(
-        (event) => this.exportWithPolicy(event),
-        maxSize,
-        flushIntervalMs,
-        (error) => this.reportBatchingFailure(error),
+          (event) => this.exportWithPolicy(event),
+          maxSize,
+          flushIntervalMs,
+          (error) => this.reportBatchingFailure(error),
         );
       }
     } catch (error) {
@@ -144,6 +175,96 @@ export class LoggerImpl implements Logger {
       });
       throw error;
     }
+  }
+
+  private resolveExporterNames(config: Record<string, unknown>): string[] {
+    if (Array.isArray(config.exporters)) {
+      if (config.exporters.length === 0) {
+        throw new Dt3ConfigurationError('exporters must not be empty');
+      }
+      if (!config.exporters.every((name): name is string => typeof name === 'string')) {
+        throw new Dt3ConfigurationError('exporters must be an array of strings');
+      }
+      for (const name of config.exporters) {
+        if (!BUILTIN_EXPORTERS.has(name)) {
+          throw new Dt3ConfigurationError(`Unsupported exporter: ${name}`);
+        }
+      }
+      return config.exporters;
+    }
+
+    const exporter = typeof config.exporter === 'string' ? config.exporter : 'stdout';
+    if (!BUILTIN_EXPORTERS.has(exporter)) {
+      throw new Dt3ConfigurationError(`Unsupported exporter: ${exporter}`);
+    }
+    return [exporter];
+  }
+
+  private createBuiltinSink(exporterName: string, config: Record<string, unknown>): EventSink {
+    if (exporterName === 'stdout') {
+      return new StdoutSink();
+    }
+
+    if (exporterName === 'file') {
+      return new FileTransport(
+        typeof config['exporter.file.path'] === 'string' ? config['exporter.file.path'] : '',
+      );
+    }
+
+    if (exporterName === 'http') {
+      return new HttpTransport(
+        typeof config['exporter.http.endpoint'] === 'string' ? config['exporter.http.endpoint'] : '',
+        this.resolveHttpTimeout(config),
+        this.resolveHeaders(config['exporter.http.headers'], 'exporter.http.headers'),
+        (error) => this.observeAsyncDeliveryFailure(error),
+        !this.failOpen,
+      );
+    }
+
+    if (exporterName === 'otlp') {
+      return new OtlpTransport(
+        typeof config['otlp.endpoint'] === 'string' ? config['otlp.endpoint'] : '',
+        typeof config['otlp.timeout'] === 'number' ? config['otlp.timeout'] : 10000,
+        this.resolveHeaders(config['otlp.headers'], 'otlp.headers'),
+        (error) => this.observeAsyncDeliveryFailure(error),
+        !this.failOpen,
+      );
+    }
+
+    if (exporterName === 'kafka') {
+      return new KafkaTransport(
+        typeof config['exporter.kafka.topic'] === 'string' ? config['exporter.kafka.topic'] : '',
+        typeof config['exporter.kafka.rest_endpoint'] === 'string'
+          ? config['exporter.kafka.rest_endpoint']
+          : '',
+        typeof config['exporter.kafka.timeout'] === 'number' ? config['exporter.kafka.timeout'] : 10000,
+        this.resolveHeaders(config['exporter.kafka.headers'], 'exporter.kafka.headers'),
+      );
+    }
+
+    if (exporterName === 'eventhub') {
+      return new EventHubTransport(
+        typeof config['exporter.eventhub.endpoint'] === 'string'
+          ? config['exporter.eventhub.endpoint']
+          : '',
+        typeof config['exporter.eventhub.timeout'] === 'number'
+          ? config['exporter.eventhub.timeout']
+          : 10000,
+        this.resolveHeaders(config['exporter.eventhub.headers'], 'exporter.eventhub.headers'),
+      );
+    }
+
+    throw new Dt3ConfigurationError(`Unsupported exporter: ${exporterName}`);
+  }
+
+  private isEventSink(value: unknown): value is EventSink {
+    return (
+      value !== null &&
+      typeof value === 'object' &&
+      typeof (value as EventSink).export === 'function' &&
+      typeof (value as EventSink).flush === 'function' &&
+      typeof (value as EventSink).close === 'function'
+    );
   }
 
   private resolveBatchingNumber(value: unknown, key: string, defaultValue: number): number {
@@ -273,21 +394,12 @@ export class LoggerImpl implements Logger {
   }
 
   private export(event: LogEvent): void {
-    if (this.exporter === 'stdout') {
-      console.log(JSON.stringify(event));
-    } else if (this.exporter === 'file') {
-      this.fileTransport?.export(event);
-    } else if (this.exporter === 'http') {
-      this.httpTransport?.export(event);
-    } else if (this.exporter === 'otlp') {
-      this.otlpTransport?.export(event);
-    }
+    this.fanout.export(event);
   }
 
   private exportWithPolicy(event: LogEvent): void {
-    this.errorHandler.guard(() => this.export(event), Dt3ErrorPhase.Delivery, {
-      exporter: this.exporter,
-    });
+    // MultiSinkFanout reports per-sink failures and rethrows when fail-closed.
+    this.export(event);
   }
 
   private log(
@@ -316,7 +428,7 @@ export class LoggerImpl implements Logger {
       message,
       'event.name': eventName,
       'schema.version':
-        typeof this.config['schema.version'] === 'string' ? this.config['schema.version'] : '1.0.0',
+        typeof this.config['schema.version'] === 'string' ? this.config['schema.version'] : '1.1.0',
       'sdk.name': typeof this.config['sdk.name'] === 'string' ? this.config['sdk.name'] : '@digitalt3/commons',
       'sdk.version': typeof this.config['sdk.version'] === 'string' ? this.config['sdk.version'] : '0.1.0',
     });
@@ -325,6 +437,26 @@ export class LoggerImpl implements Logger {
       if (typeof this.config[field] === 'string') {
         logEvent[field] = this.config[field];
       }
+    }
+
+    if (typeof logEvent['event.id'] !== 'string' || logEvent['event.id'].length === 0) {
+      logEvent['event.id'] = randomUUID();
+    }
+
+    if (this.autoGenerateIds) {
+      if (typeof logEvent['trace.id'] !== 'string' || !/^[a-f0-9]{32}$/.test(logEvent['trace.id'])) {
+        logEvent['trace.id'] = randomBytesHex(16);
+      }
+      if (typeof logEvent['span.id'] !== 'string' || !/^[a-f0-9]{16}$/.test(logEvent['span.id'])) {
+        logEvent['span.id'] = randomBytesHex(8);
+      }
+    }
+
+    if (
+      (typeof logEvent['component.name'] !== 'string' || logEvent['component.name'].length === 0) &&
+      typeof this.config['component.name'] === 'string'
+    ) {
+      logEvent['component.name'] = this.config['component.name'];
     }
 
     if (error) {
@@ -520,6 +652,28 @@ export class LoggerImpl implements Logger {
 
   // PUBLIC_INTERFACE
   /**
+   * Register an additional export sink for fan-out delivery.
+   *
+   * @param sink - Destination that receives processed events.
+   * @param name - Optional diagnostic label for failure isolation.
+   */
+  public registerSink(sink: EventSink, name?: string): void {
+    this.ensureOpen();
+    this.fanout.register(sink, name);
+  }
+
+  // PUBLIC_INTERFACE
+  /**
+   * Create a lightweight tracer bound to this logger.
+   *
+   * @returns A tracer that scopes W3C ids into log context.
+   */
+  public createTracer(): Tracer {
+    return new TracerImpl(this, this.spanEventsEnabled);
+  }
+
+  // PUBLIC_INTERFACE
+  /**
    * Flush buffered events and settle delivery work initiated before the flush boundary.
    *
    * @returns A promise that rejects only when a delivery failure is configured
@@ -530,9 +684,7 @@ export class LoggerImpl implements Logger {
 
     try {
       this.batcher?.flush();
-      this.fileTransport?.flush();
-      await this.httpTransport?.flush();
-      await this.otlpTransport?.flush();
+      await this.fanout.flush();
     } catch (error) {
       this.handleDeliveryFailure(error);
     }
@@ -553,11 +705,9 @@ export class LoggerImpl implements Logger {
     this.closed = true;
     try {
       this.batcher?.close();
-      this.fileTransport?.flush();
+      void this.fanout.close();
     } catch (error) {
       this.handleDeliveryFailure(error);
     }
-    this.httpTransport?.close();
-    this.otlpTransport?.close();
   }
 }
