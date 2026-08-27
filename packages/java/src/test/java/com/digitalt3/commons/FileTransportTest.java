@@ -47,7 +47,7 @@ public class FileTransportTest {
         assertEquals("File transport event", event.path("message").asText());
         assertEquals("FILE_EVENT", event.path("event.name").asText());
         assertEquals("req-1", event.path("request.id").asText());
-        assertEquals("1.0.0", event.path("schema.version").asText());
+        assertEquals("1.1.0", event.path("schema.version").asText());
         assertEquals("file-test-service", event.path("service.name").asText());
     }
 

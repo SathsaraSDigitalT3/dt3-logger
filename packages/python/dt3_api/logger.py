@@ -46,6 +46,10 @@ class Logger(Protocol):
         """Close the logger and its configured exporter."""
 
     # PUBLIC_INTERFACE
+    def register_sink(self, sink: Any, name: Optional[str] = None) -> str:
+        """Register an additional event sink for runtime fan-out."""
+
+    # PUBLIC_INTERFACE
     def create_timer(
         self,
         name: str,

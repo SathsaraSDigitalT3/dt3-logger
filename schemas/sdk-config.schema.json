@@ -21,10 +21,14 @@
     },
     "schema.version": {
       "type": "string",
-      "default": "1.0.0"
+      "default": "1.1.0"
     },
     "sdk.name": { "type": "string" },
     "sdk.version": { "type": "string" },
+    "component.name": {
+      "type": "string",
+      "description": "Default component/module name for events"
+    },
     "validation.mode": {
       "type": "string",
       "enum": ["STRICT", "LENIENT", "OFF"],
@@ -38,6 +42,14 @@
       "type": "string",
       "enum": ["stdout", "file", "http", "otlp"],
       "default": "stdout"
+    },
+    "exporters": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": ["stdout", "file", "http", "otlp"]
+      },
+      "description": "Multiple exporters for fan-out; takes precedence over exporter"
     },
     "exporter.file.path": { "type": "string" },
     "exporter.http.endpoint": { "type": "string" },
@@ -63,6 +75,14 @@
     },
     "batching.enabled": { "type": "boolean", "default": false },
     "batching.max_size": { "type": "integer", "default": 100 },
-    "batching.flush_interval_ms": { "type": "integer", "default": 5000 }
+    "batching.flush_interval_ms": { "type": "integer", "default": 5000 },
+    "tracing.auto_generate_correlation_id": {
+      "type": "boolean",
+      "default": false
+    },
+    "tracing.span_events.enabled": {
+      "type": "boolean",
+      "default": true
+    }
   }
 }

@@ -1,0 +1,28 @@
+{
+  "purpose": "AI event with kavia.* attributes validates; token counts use non-colliding names.",
+  "event": {
+    "timestamp": "2026-08-27T12:00:00.000Z",
+    "severity": "INFO",
+    "message": "AI response received",
+    "event.name": "AI_RESPONSE_RECEIVED",
+    "event.id": "550e8400-e29b-41d4-a716-446655440002",
+    "schema.version": "1.1.0",
+    "sdk.name": "dt3-cross-language-fixture",
+    "sdk.version": "0.1.0",
+    "service.name": "fixture-service",
+    "service.version": "1.0.0",
+    "deployment.environment": "test",
+    "kavia.provider": "openai",
+    "kavia.model": "gpt-4o",
+    "kavia.request.id": "req-123",
+    "kavia.tokens.prompt": 120,
+    "kavia.tokens.completion": 45,
+    "kavia.tokens.total": 165,
+    "kavia.latency.ms": 320.0,
+    "kavia.finish_reason": "stop"
+  },
+  "expected": {
+    "valid": true,
+    "errors": []
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://digitalt3.com/schemas/api-event/1.0.0",
+  "title": "DT3 Commons API Event Attributes",
+  "description": "Well-known HTTP/API attributes for canonical LogEvents",
+  "type": "object",
+  "properties": {
+    "event.name": {
+      "type": "string",
+      "enum": ["INCOMING_HTTP", "OUTGOING_HTTP"]
+    },
+    "http.request.method": { "type": "string" },
+    "http.route": { "type": "string" },
+    "http.target": { "type": "string" },
+    "http.response.status_code": { "type": "integer", "minimum": 100, "maximum": 599 },
+    "duration.ms": { "type": "number", "minimum": 0 }
+  },
+  "additionalProperties": true
+}

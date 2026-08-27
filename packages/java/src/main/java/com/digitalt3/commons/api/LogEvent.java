@@ -24,6 +24,9 @@ public class LogEvent {
     private String serviceName;
     private String serviceVersion;
     private String deploymentEnvironment;
+    private String eventId;
+    private String operationId;
+    private String componentName;
     private String traceId;
     private String spanId;
     private String parentSpanId;
@@ -76,6 +79,12 @@ public class LogEvent {
     public void setServiceVersion(String serviceVersion) { this.serviceVersion = serviceVersion; }
     public String getDeploymentEnvironment() { return deploymentEnvironment; }
     public void setDeploymentEnvironment(String env) { this.deploymentEnvironment = env; }
+    public String getEventId() { return eventId; }
+    public void setEventId(String eventId) { this.eventId = eventId; }
+    public String getOperationId() { return operationId; }
+    public void setOperationId(String operationId) { this.operationId = operationId; }
+    public String getComponentName() { return componentName; }
+    public void setComponentName(String componentName) { this.componentName = componentName; }
     public String getTraceId() { return traceId; }
     public void setTraceId(String traceId) { this.traceId = traceId; }
     public String getSpanId() { return spanId; }
@@ -139,6 +148,9 @@ public class LogEvent {
         if (serviceName != null) map.put("service.name", serviceName);
         if (serviceVersion != null) map.put("service.version", serviceVersion);
         if (deploymentEnvironment != null) map.put("deployment.environment", deploymentEnvironment);
+        if (eventId != null) map.put("event.id", eventId);
+        if (operationId != null) map.put("operation.id", operationId);
+        if (componentName != null) map.put("component.name", componentName);
         if (traceId != null) map.put("trace.id", traceId);
         if (spanId != null) map.put("span.id", spanId);
         if (parentSpanId != null) map.put("parent.span.id", parentSpanId);
@@ -186,8 +198,12 @@ public class LogEvent {
         public Builder serviceName(String v) { event.serviceName = v; return this; }
         public Builder serviceVersion(String v) { event.serviceVersion = v; return this; }
         public Builder deploymentEnvironment(String v) { event.deploymentEnvironment = v; return this; }
+        public Builder eventId(String v) { event.eventId = v; return this; }
+        public Builder operationId(String v) { event.operationId = v; return this; }
+        public Builder componentName(String v) { event.componentName = v; return this; }
         public Builder traceId(String v) { event.traceId = v; return this; }
         public Builder spanId(String v) { event.spanId = v; return this; }
+        public Builder parentSpanId(String v) { event.parentSpanId = v; return this; }
         public Builder correlationId(String v) { event.correlationId = v; return this; }
         public Builder tenantId(String v) { event.tenantId = v; return this; }
         public Builder durationMs(Double v) {

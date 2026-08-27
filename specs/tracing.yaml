@@ -63,3 +63,31 @@ propagation:
     - Handle malformed headers safely (log warning, return empty context)
     - Generate correlation ID if not present and auto_generate configured
     - Never crash the application in fail-open mode
+
+span_api:
+  description: >
+    Lightweight W3C-compatible span creation inside the SDK.
+    Does not require the full OpenTelemetry SDK as a dependency.
+    Spans participate via scoped LogContext (trace.id, span.id, parent.span.id).
+  methods:
+    - name: startSpan
+      parameters:
+        - name: name
+          type: string
+          required: true
+        - name: options
+          type: SpanOptions
+          required: false
+      returns: Span
+    - name: withSpan
+      description: Run a callback with an active span scope; ends the span on exit
+  span_fields:
+    - Generated span.id is 16 lowercase hex characters
+    - Inherited or newly generated trace.id is 32 lowercase hex characters
+    - parent.span.id is set from the previously active span when present
+  span_events:
+    - When tracing.span_events.enabled is true (default), ending a span emits an INFO LogEvent
+    - Span.addEvent attaches a LogEvent under the active span context via the logger
+  configuration:
+    - tracing.span_events.enabled (boolean, default true)
+    - tracing.auto_generate_correlation_id (boolean, default false)

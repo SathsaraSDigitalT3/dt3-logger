@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://digitalt3.com/schemas/ai-event/1.0.0",
+  "title": "DT3 Commons AI Event Attributes",
+  "description": "Well-known kavia.* AI attributes for canonical LogEvents",
+  "type": "object",
+  "properties": {
+    "event.name": {
+      "type": "string",
+      "enum": [
+        "AI_PROMPT_SUBMITTED",
+        "AI_RESPONSE_RECEIVED",
+        "AI_TOOL_INVOCATION",
+        "AI_MEMORY_RETRIEVAL",
+        "AI_RAG_RETRIEVAL",
+        "AI_AGENT_EXECUTION",
+        "AI_SAFETY_FILTER_APPLIED"
+      ]
+    },
+    "kavia.provider": { "type": "string" },
+    "kavia.model": { "type": "string" },
+    "kavia.model.version": { "type": "string" },
+    "kavia.prompt": { "type": "string" },
+    "kavia.response": { "type": "string" },
+    "kavia.tokens.prompt": { "type": "integer", "minimum": 0 },
+    "kavia.tokens.completion": { "type": "integer", "minimum": 0 },
+    "kavia.tokens.total": { "type": "integer", "minimum": 0 },
+    "kavia.latency.ms": { "type": "number", "minimum": 0 },
+    "kavia.cost": { "type": "number", "minimum": 0 },
+    "kavia.context_window.size": { "type": "integer", "minimum": 0 },
+    "kavia.memory.bytes": { "type": "integer", "minimum": 0 },
+    "kavia.conversation.id": { "type": "string" },
+    "kavia.agent.id": { "type": "string" },
+    "kavia.request.id": { "type": "string" },
+    "kavia.finish_reason": { "type": "string" },
+    "kavia.cache.hit": { "type": "boolean" },
+    "kavia.temperature": { "type": "number" },
+    "kavia.max_tokens": { "type": "integer", "minimum": 0 }
+  },
+  "additionalProperties": true
+}

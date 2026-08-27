@@ -86,7 +86,7 @@ public class TimerTest {
         assertTrue(event.contains("\"event.name\":\"DATABASE_QUERY\""));
         assertTrue(event.matches(".*\"duration\\.ms\":\\d+.*"));
         assertTrue(event.contains("\"timestamp\":"));
-        assertTrue(event.contains("\"schema.version\":\"1.0.0\""));
+        assertTrue(event.contains("\"schema.version\":\"1.1.0\""));
         assertTrue(event.contains("\"sdk.name\":\"dt3-commons-java\""));
         assertTrue(event.contains("\"sdk.version\":\"0.1.0\""));
         assertTrue(event.contains("\"service.name\":\"timer-test\""));

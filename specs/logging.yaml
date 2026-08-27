@@ -17,7 +17,10 @@ principles:
   - Masking is applied before export by default
   - Validation mode is configurable (STRICT, LENIENT, OFF)
   - Exporters are pluggable — the logger does not know the destination
+  - Multiple sinks may be active concurrently with per-sink failure isolation
   - OpenTelemetry-compatible attribute names are preferred
+  - Typed domain events are builders that produce canonical LogEvents
+  - EventEmitter.emit routes typed events through Logger.event without replacing it
 
 severity_levels:
   - name: DEBUG
@@ -89,13 +92,42 @@ logger_interface:
       returns: Timer
     - name: flush
       description: Flush all pending log events to exporters
+    - name: registerSink
+      parameters:
+        - name: sink
+          type: EventSink
+          required: true
+      description: Register an additional export sink for fan-out
+
+event_emitter:
+  description: >
+    Optional typed emitter that accepts domain/AI builder outputs and
+    forwards canonical LogEvents to Logger.event.
+  methods:
+    - name: emit
+      parameters:
+        - name: event_object
+          type: LogEvent | DomainEvent
+          required: true
+
+sink_interface:
+  description: >
+    Pluggable export destination. Python/Node use export/flush/close;
+    Java LogTransport uses write/flush/shutdown.
+  methods:
+    - name: export
+      description: Deliver one processed LogEvent
+    - name: flush
+      description: Flush buffered sink state
+    - name: close
+      description: Release sink resources (idempotent)
 
 pipeline:
   description: >
     Every log event flows through the processing pipeline before export.
   stages:
     - name: EventFactory
-      description: Creates a structured LogEvent from logger method call
+      description: Creates a structured LogEvent from logger method call; auto-sets event.id when absent
     - name: EnrichmentProcessor
       description: Adds service metadata, trace context, tenant context, timestamps
     - name: MaskingProcessor
@@ -104,8 +136,8 @@ pipeline:
       description: Validates event against JSON Schema
     - name: BatchingProcessor
       description: Batches events for efficient export
-    - name: Exporter
-      description: Writes events to configured destination
+    - name: MultiSinkFanout
+      description: Writes events to one or more sinks with per-sink failure isolation
 
 event_naming:
   convention: UPPER_SNAKE_CASE
@@ -117,6 +149,9 @@ event_naming:
     - INCOMING_HTTP
     - WORKER_JOB_STARTED
     - WORKER_JOB_COMPLETED
+    - DB_QUERY_COMPLETED
+    - AI_PROMPT_SUBMITTED
+    - AI_RESPONSE_RECEIVED
   rules:
     - event.name is required on every log event
     - Names should be descriptive and action-oriented

@@ -20,8 +20,11 @@ configuration_fields:
   optional:
     - name: schema.version
       type: string
-      default: "1.0.0"
+      default: "1.1.0"
       description: Schema version for log events
+    - name: component.name
+      type: string
+      description: Default component/module name attached to events when absent
     - name: sdk.name
       type: string
       default: auto-detected per language
@@ -43,7 +46,14 @@ configuration_fields:
       type: string
       enum: [stdout, file, http, otlp]
       default: stdout
-      description: Log export destination
+      description: >
+        Single log export destination (backward compatible).
+        Ignored when exporters is set.
+    - name: exporters
+      type: list<string>
+      description: >
+        Multiple built-in exporters for fan-out (stdout, file, http, otlp).
+        When set, takes precedence over exporter.
     - name: exporter.file.path
       type: string
       description: File path for file exporter
@@ -73,3 +83,11 @@ configuration_fields:
       type: integer
       default: 5000
       description: Batch flush interval
+    - name: tracing.auto_generate_correlation_id
+      type: boolean
+      default: false
+      description: Auto-generate correlation.id when absent from scoped context
+    - name: tracing.span_events.enabled
+      type: boolean
+      default: true
+      description: Emit span completion LogEvents when spans end

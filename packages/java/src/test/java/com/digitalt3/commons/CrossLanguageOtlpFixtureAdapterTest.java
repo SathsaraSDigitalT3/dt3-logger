@@ -97,6 +97,7 @@ public class CrossLanguageOtlpFixtureAdapterTest {
         config.setServiceName(stringValue(event, "service.name"));
         config.setServiceVersion(stringValue(event, "service.version"));
         config.setDeploymentEnvironment(stringValue(event, "deployment.environment"));
+        config.setSchemaVersion(stringValue(event, "schema.version"));
         return config;
     }
 

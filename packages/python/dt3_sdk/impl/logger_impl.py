@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-import json
 import traceback
+import uuid
 from datetime import datetime, timezone
-from typing import Any, Callable, Dict, Mapping, Optional
+from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from dt3_sdk.batching import EventBatcher
 from dt3_sdk.context import ensure_correlation_id, get_active_logger_context
@@ -15,6 +15,7 @@ from dt3_sdk.file_transport import FileTransport
 from dt3_sdk.http_transport import HttpTransport
 from dt3_sdk.masking import MaskingEngine
 from dt3_sdk.otlp_transport import OtlpTransport
+from dt3_sdk.sink import EventSink, MultiSinkFanout, StdoutSink
 from dt3_sdk.validation import LogEventValidator, ValidationError
 
 
@@ -61,16 +62,33 @@ class LoggerImpl:
 
     def _safe_exporter_name(self) -> str:
         """Return a safe exporter diagnostic without invoking arbitrary __str__ methods."""
+        exporters = self.config.get("exporters")
+        if isinstance(exporters, list) and exporters:
+            names = [name for name in exporters if isinstance(name, str)]
+            if names:
+                return ",".join(names)
         exporter = self.config.get("exporter", "stdout")
         return exporter if isinstance(exporter, str) else "invalid"
 
     def _initialize(self) -> None:
         """Initialize logger pipeline components after construction reporting is ready."""
         self.exporter = self.config.get("exporter", "stdout")
-        if not isinstance(self.exporter, str):
+        exporters = self.config.get("exporters")
+        if exporters is not None:
+            if not isinstance(exporters, list) or not exporters:
+                from dt3_sdk.errors import Dt3ConfigurationError
+
+                raise Dt3ConfigurationError("exporters must be a non-empty list")
+            if any(not isinstance(name, str) for name in exporters):
+                from dt3_sdk.errors import Dt3ConfigurationError
+
+                raise Dt3ConfigurationError("exporters entries must be strings")
+            self.exporter = ",".join(exporters)
+        elif not isinstance(self.exporter, str):
             from dt3_sdk.errors import Dt3ConfigurationError
 
             raise Dt3ConfigurationError("Unsupported exporter type")
+
         self.validation_mode = str(
             self.config.get("validation.mode", "LENIENT")
         ).upper()
@@ -114,13 +132,72 @@ class LoggerImpl:
             self.config.get("tracing.auto_generate_correlation_id", False),
             "tracing.auto_generate_correlation_id",
         )
+        self._span_events_enabled = self._require_boolean(
+            self.config.get("tracing.span_events.enabled", True),
+            "tracing.span_events.enabled",
+        )
 
-        if self.exporter == "file":
-            self._file_transport = FileTransport(
+        sink_pairs = self._build_sink_pairs(exporters)
+        self._fanout = MultiSinkFanout(
+            sink_pairs,
+            on_error=self._on_sink_error,
+        )
+
+        if self._require_boolean(
+            self.config.get("batching.enabled", False),
+            "batching.enabled",
+        ):
+            self._batcher = EventBatcher(
+                self._export_with_policy,
+                max_size=self.config.get("batching.max_size", 100),
+                flush_interval_ms=self.config.get("batching.flush_interval_ms", 5000),
+                on_error=self._handle_batching_error,
+            )
+
+    def _build_sink_pairs(
+        self,
+        exporters: Optional[List[str]],
+    ) -> List[Tuple[str, EventSink]]:
+        """Build the initial ``(name, sink)`` list from config."""
+        pairs: List[Tuple[str, EventSink]] = []
+
+        if exporters is not None:
+            for name in exporters:
+                pairs.append((name, self._create_builtin_sink(name)))
+        else:
+            pairs.append((self.exporter, self._create_builtin_sink(self.exporter)))
+
+        configured_sinks = self.config.get("sinks")
+        if configured_sinks is not None:
+            if not isinstance(configured_sinks, Sequence) or isinstance(
+                configured_sinks, (str, bytes)
+            ):
+                from dt3_sdk.errors import Dt3ConfigurationError
+
+                raise Dt3ConfigurationError("sinks must be a list of EventSink instances")
+            for index, sink in enumerate(configured_sinks):
+                if not self._looks_like_sink(sink):
+                    from dt3_sdk.errors import Dt3ConfigurationError
+
+                    raise Dt3ConfigurationError(
+                        "sinks entries must implement export/flush/close"
+                    )
+                pairs.append((f"custom-{index}", sink))
+
+        return pairs
+
+    def _create_builtin_sink(self, exporter_name: str) -> EventSink:
+        """Construct a built-in sink for a named exporter."""
+        if exporter_name == "stdout":
+            return StdoutSink()
+        if exporter_name == "file":
+            transport = FileTransport(
                 self._config_value("exporter.file.path", "file.path", default="")
             )
-        elif self.exporter == "http":
-            self._http_transport = HttpTransport(
+            self._file_transport = transport
+            return transport
+        if exporter_name == "http":
+            transport = HttpTransport(
                 endpoint=self._config_value(
                     "exporter.http.endpoint",
                     "http.endpoint",
@@ -133,27 +210,36 @@ class LoggerImpl:
                     default=None,
                 ),
             )
-        elif self.exporter == "otlp":
-            self._otlp_transport = OtlpTransport(
+            self._http_transport = transport
+            return transport
+        if exporter_name == "otlp":
+            transport = OtlpTransport(
                 endpoint=self._config_value("otlp.endpoint", default=""),
                 timeout=self._otlp_timeout_seconds(),
                 headers=self._config_value("otlp.headers", default=None),
             )
-        elif self.exporter != "stdout":
-            from dt3_sdk.errors import Dt3ConfigurationError
+            self._otlp_transport = transport
+            return transport
 
-            raise Dt3ConfigurationError(f"Unsupported exporter: {self.exporter}")
+        from dt3_sdk.errors import Dt3ConfigurationError
 
-        if self._require_boolean(
-            self.config.get("batching.enabled", False),
-            "batching.enabled",
-        ):
-            self._batcher = EventBatcher(
-                self._export_with_policy,
-                max_size=self.config.get("batching.max_size", 100),
-                flush_interval_ms=self.config.get("batching.flush_interval_ms", 5000),
-                on_error=self._handle_batching_error,
-            )
+        raise Dt3ConfigurationError(f"Unsupported exporter: {exporter_name}")
+
+    @staticmethod
+    def _looks_like_sink(sink: Any) -> bool:
+        """Return whether an object exposes the EventSink method surface."""
+        return all(
+            callable(getattr(sink, method_name, None))
+            for method_name in ("export", "flush", "close")
+        )
+
+    def _on_sink_error(self, sink_name: str, error: BaseException) -> None:
+        """Report a per-sink failure and apply fail-open disposition."""
+        self.error_handler.handle(
+            error,
+            phase=Dt3ErrorPhase.DELIVERY,
+            context={"exporter": sink_name, "sink": sink_name},
+        )
 
     def _log(
         self,
@@ -179,6 +265,7 @@ class LoggerImpl:
         # Context is merged first so the logger can reassert its reserved fields.
         # This prevents a caller from replacing method-owned severity, event metadata,
         # or the explicit error argument's structured error fields.
+        # operation.id from caller/scoped context passes through via this merge.
         log_event: Dict[str, Any] = dict(caller_context)
         log_event.update(
             {
@@ -186,7 +273,7 @@ class LoggerImpl:
                 "severity": level,
                 "message": message,
                 "event.name": event_name,
-                "schema.version": self.config.get("schema.version", "1.0.0"),
+                "schema.version": self.config.get("schema.version", "1.1.0"),
                 "sdk.name": self.config.get("sdk.name", "dt3-python"),
                 "sdk.version": self.config.get("sdk.version", "0.1.0"),
                 "service.name": self.config.get("service.name"),
@@ -197,6 +284,16 @@ class LoggerImpl:
             log_event["deployment.environment"] = self.config[
                 "deployment.environment"
             ]
+
+        event_id = log_event.get("event.id")
+        if not isinstance(event_id, str) or not event_id.strip():
+            log_event["event.id"] = str(uuid.uuid4())
+
+        component_name = log_event.get("component.name")
+        if not isinstance(component_name, str) or not component_name.strip():
+            configured_component = self.config.get("component.name")
+            if isinstance(configured_component, str) and configured_component.strip():
+                log_event["component.name"] = configured_component
 
         if error is not None:
             log_event["error.type"] = type(error).__name__
@@ -272,22 +369,16 @@ class LoggerImpl:
             self._export_with_policy(masked_event)
 
     def _export(self, event: Dict[str, Any]) -> None:
-        """Deliver an already processed final event through the selected exporter."""
-        if self.exporter == "stdout":
-            print(json.dumps(event))
-        elif self._file_transport is not None:
-            self._file_transport.export(event)
-        elif self._http_transport is not None:
-            self._http_transport.export(event)
-        elif self._otlp_transport is not None:
-            self._otlp_transport.export(event)
+        """Deliver an already processed final event through configured sinks."""
+        self._fanout.export(event)
 
     def _export_with_policy(self, event: Dict[str, Any]) -> None:
-        """Deliver one final event under the configured delivery failure policy."""
-        self._deliver(
-            lambda: self._export(event),
-            phase=Dt3ErrorPhase.DELIVERY,
-        )
+        """Deliver one final event under the configured delivery failure policy.
+
+        Per-sink failures are reported inside MultiSinkFanout via ``_on_sink_error``.
+        The fan-out re-raises disposition errors after all sinks have been attempted.
+        """
+        self._fanout.export(event)
 
     def _deliver(
         self,
@@ -459,18 +550,40 @@ class LoggerImpl:
         self._log(severity, message, supplied_event)
 
     # PUBLIC_INTERFACE
+    def register_sink(self, sink: EventSink, name: Optional[str] = None) -> str:
+        """Register an additional sink for runtime fan-out.
+
+        Args:
+            sink: Object implementing ``export`` / ``flush`` / ``close``.
+            name: Optional diagnostic name for the sink.
+
+        Returns:
+            The assigned sink name.
+
+        Raises:
+            TypeError: If the sink does not implement the EventSink surface.
+            RuntimeError: If the logger is closed.
+        """
+        self._ensure_open()
+        if not self._looks_like_sink(sink):
+            raise TypeError("sink must implement export, flush, and close")
+        return self._fanout.register(sink, name)
+
+    # PUBLIC_INTERFACE
+    def create_tracer(self) -> "Tracer":
+        """Create a Tracer bound to this logger using configured span-event settings."""
+        from dt3_sdk.tracer import Tracer
+
+        self._ensure_open()
+        return Tracer(self, span_events_enabled=self._span_events_enabled)
+
+    # PUBLIC_INTERFACE
     def flush(self) -> None:
-        """Synchronously flush buffered events and the selected exporter."""
+        """Synchronously flush buffered events and all configured sinks."""
         self._ensure_open()
         if self._batcher is not None:
             self._batcher.flush()
-
-        if self._file_transport is not None:
-            self._deliver(self._file_transport.flush)
-        elif self._http_transport is not None:
-            self._deliver(self._http_transport.flush)
-        elif self._otlp_transport is not None:
-            self._deliver(self._otlp_transport.flush)
+        self._fanout.flush()
 
     # PUBLIC_INTERFACE
     def error_snapshot(self) -> Dict[str, int]:
@@ -479,7 +592,7 @@ class LoggerImpl:
 
     # PUBLIC_INTERFACE
     def close(self) -> None:
-        """Flush remaining events, then close the selected exporter."""
+        """Flush remaining events, then close all configured sinks."""
         if self._closed:
             return
         self._closed = True
@@ -487,12 +600,9 @@ class LoggerImpl:
         if self._batcher is not None:
             self._deliver(self._batcher.close)
 
-        if self._file_transport is not None:
-            self._deliver(self._file_transport.close)
-        elif self._http_transport is not None:
-            self._deliver(self._http_transport.close)
-        elif self._otlp_transport is not None:
-            self._deliver(self._otlp_transport.close)
+        # Per-sink failures are reported via ``_on_sink_error``; disposition
+        # errors (fail_open=False) are re-raised after all sinks are attempted.
+        self._fanout.close()
 
     # PUBLIC_INTERFACE
     def create_timer(

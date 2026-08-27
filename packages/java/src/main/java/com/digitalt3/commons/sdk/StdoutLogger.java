@@ -1,10 +1,12 @@
 package com.digitalt3.commons.sdk;
 
-import com.digitalt3.commons.api.Logger;
 import com.digitalt3.commons.api.LogContext;
 import com.digitalt3.commons.api.LogEvent;
+import com.digitalt3.commons.api.LogTransport;
+import com.digitalt3.commons.api.Logger;
 import com.digitalt3.commons.api.SdkConfig;
 import com.digitalt3.commons.api.Timer;
+import com.digitalt3.commons.api.Tracer;
 import com.digitalt3.commons.api.ValidationMode;
 import com.digitalt3.commons.api.Validator;
 
@@ -12,6 +14,7 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
@@ -20,8 +23,9 @@ import java.util.UUID;
  * Synchronous logger that builds, masks, validates, and exports structured events.
  *
  * <p>Despite its retained historical name, this implementation supports the
- * configured stdout and file exporters. The processing order is canonical event
- * creation, masking, validation, then transport delivery.</p>
+ * configured stdout, file, HTTP, and OTLP exporters, including multi-sink fan-out.
+ * The processing order is canonical event creation, masking, validation, then
+ * transport delivery.</p>
  *
  * @since 0.1.0
  */
@@ -29,13 +33,12 @@ public final class StdoutLogger implements Logger {
 
     private static final String GENERIC_EVENT = "GENERIC_EVENT";
     private static final String CANONICAL_EVENT_NAME_PATTERN = "^[A-Z][A-Z0-9_]*$";
+    private static final String DEFAULT_SCHEMA_VERSION = "1.1.0";
 
     private final SdkConfig config;
     private final RecursiveMaskingEngine maskingEngine;
     private final MapEventValidator eventValidator;
-    private final FileTransport fileTransport;
-    private final HttpTransport httpTransport;
-    private final OtlpTransport otlpTransport;
+    private final MultiSinkFanout sinkFanout;
     private final EventBatcher batcher;
     private final ErrorHandler errorHandler;
     private boolean closed;
@@ -60,9 +63,10 @@ public final class StdoutLogger implements Logger {
                 suppliedConfig.isMaskingEnabled()
             );
             this.eventValidator = new MapEventValidator();
-            this.fileTransport = createFileTransport(suppliedConfig);
-            this.httpTransport = createHttpTransport(suppliedConfig);
-            this.otlpTransport = createOtlpTransport(suppliedConfig);
+            this.sinkFanout = new MultiSinkFanout(
+                createConfiguredTransports(suppliedConfig),
+                constructionHandler
+            );
             this.batcher = suppliedConfig.isBatchingEnabled()
                 ? new EventBatcher(
                     this::writeFinalEvent,
@@ -179,7 +183,31 @@ public final class StdoutLogger implements Logger {
 
     // PUBLIC_INTERFACE
     /**
-     * Flush the configured synchronous transport.
+     * Register an additional export sink for concurrent fan-out.
+     *
+     * @param sink transport to register
+     */
+    @Override
+    public synchronized void registerSink(LogTransport sink) {
+        ensureOpen();
+        sinkFanout.addSink(Objects.requireNonNull(sink, "sink must not be null"));
+    }
+
+    // PUBLIC_INTERFACE
+    /**
+     * Create a tracer bound to this logger.
+     *
+     * @return tracer using this logger for span events
+     */
+    @Override
+    public synchronized Tracer createTracer() {
+        ensureOpen();
+        return new TracerImpl(this, config.isTracingSpanEventsEnabled());
+    }
+
+    // PUBLIC_INTERFACE
+    /**
+     * Flush the configured synchronous transport(s).
      */
     @Override
     public void flush() {
@@ -191,37 +219,12 @@ public final class StdoutLogger implements Logger {
                 handleFailure(exception, Dt3ErrorPhase.BATCHING, false);
             }
         }
-        if (fileTransport != null) {
-            try {
-                fileTransport.flush();
-            } catch (RuntimeException exception) {
-                handleFailure(exception, Dt3ErrorPhase.DELIVERY, false);
-            }
-            return;
-        }
-        if (httpTransport != null) {
-            try {
-                httpTransport.flush();
-            } catch (RuntimeException exception) {
-                handleFailure(exception, Dt3ErrorPhase.DELIVERY, false);
-            }
-            return;
-        }
-        if (otlpTransport != null) {
-            try {
-                otlpTransport.flush();
-            } catch (RuntimeException exception) {
-                handleFailure(exception, Dt3ErrorPhase.DELIVERY, false);
-            }
-            return;
-        }
-
-        System.out.flush();
+        sinkFanout.flush();
     }
 
     // PUBLIC_INTERFACE
     /**
-     * Close the configured transport and prevent subsequent logging or flushes.
+     * Close the configured transport(s) and prevent subsequent logging or flushes.
      *
      * <p>This operation is idempotent. The Java SDK retains {@code close} as
      * the logger lifecycle name while transports retain their existing
@@ -242,60 +245,48 @@ public final class StdoutLogger implements Logger {
         }
 
         closed = true;
-        if (fileTransport != null) {
-            try {
-                fileTransport.shutdown();
-            } catch (RuntimeException exception) {
-                handleFailure(exception, Dt3ErrorPhase.LIFECYCLE, false);
-            }
-        } else if (httpTransport != null) {
-            try {
-                httpTransport.shutdown();
-            } catch (RuntimeException exception) {
-                handleFailure(exception, Dt3ErrorPhase.LIFECYCLE, false);
-            }
-        } else if (otlpTransport != null) {
-            try {
-                otlpTransport.shutdown();
-            } catch (RuntimeException exception) {
-                handleFailure(exception, Dt3ErrorPhase.LIFECYCLE, false);
-            }
-        }
+        sinkFanout.shutdown();
     }
 
-    private FileTransport createFileTransport(SdkConfig sdkConfig) {
+    private List<LogTransport> createConfiguredTransports(SdkConfig sdkConfig) {
+        List<String> exporterNames = resolveExporterNames(sdkConfig);
+        List<LogTransport> transports = new ArrayList<>();
+        for (String exporterName : exporterNames) {
+            transports.add(createTransport(exporterName, sdkConfig));
+        }
+        return transports;
+    }
+
+    private List<String> resolveExporterNames(SdkConfig sdkConfig) {
+        List<String> configuredExporters = sdkConfig.getExporters();
+        if (configuredExporters != null && !configuredExporters.isEmpty()) {
+            return configuredExporters;
+        }
+
         String exporter = sdkConfig.getExporter();
-        if (exporter == null || exporter.trim().isEmpty() || "stdout".equalsIgnoreCase(exporter)) {
-            return null;
+        if (exporter == null || exporter.trim().isEmpty()) {
+            return List.of("stdout");
         }
-        if ("file".equalsIgnoreCase(exporter)) {
-            return new FileTransport(sdkConfig.getFilePath());
-        }
-        if ("http".equalsIgnoreCase(exporter) || "otlp".equalsIgnoreCase(exporter)) {
-            return null;
-        }
-
-        throw new IllegalArgumentException("Unsupported exporter: " + exporter);
+        return List.of(exporter.trim());
     }
 
-    private HttpTransport createHttpTransport(SdkConfig sdkConfig) {
-        return "http".equalsIgnoreCase(sdkConfig.getExporter())
-            ? new HttpTransport(
+    private LogTransport createTransport(String exporter, SdkConfig sdkConfig) {
+        String normalized = exporter == null ? "" : exporter.trim().toLowerCase(Locale.ROOT);
+        return switch (normalized) {
+            case "", "stdout" -> new StdoutTransport();
+            case "file" -> new FileTransport(sdkConfig.getFilePath());
+            case "http" -> new HttpTransport(
                 sdkConfig.getHttpEndpoint(),
                 sdkConfig.getHttpTimeout(),
                 sdkConfig.getHttpHeaders()
-            )
-            : null;
-    }
-
-    private OtlpTransport createOtlpTransport(SdkConfig sdkConfig) {
-        return "otlp".equalsIgnoreCase(sdkConfig.getExporter())
-            ? new OtlpTransport(
+            );
+            case "otlp" -> new OtlpTransport(
                 sdkConfig.getOtlpEndpoint(),
                 sdkConfig.getOtlpTimeout(),
                 sdkConfig.getOtlpHeaders()
-            )
-            : null;
+            );
+            default -> throw new IllegalArgumentException("Unsupported exporter: " + exporter);
+        };
     }
 
     private ErrorHandler createConstructionErrorHandler(SdkConfig sdkConfig) {
@@ -418,12 +409,6 @@ public final class StdoutLogger implements Logger {
             this.name = name;
         }
 
-        // PUBLIC_INTERFACE
-        /**
-         * Start this timer using the JVM monotonic clock.
-         *
-         * @return this timer
-         */
         @Override
         public synchronized Timer start() {
             ensureOpen();
@@ -436,12 +421,6 @@ public final class StdoutLogger implements Logger {
             return this;
         }
 
-        // PUBLIC_INTERFACE
-        /**
-         * Stop once and emit the timer completion event through the logger pipeline.
-         *
-         * @return the measured non-negative duration in milliseconds
-         */
         @Override
         public synchronized long stop() {
             ensureOpen();
@@ -464,23 +443,11 @@ public final class StdoutLogger implements Logger {
             return measuredDurationMs;
         }
 
-        // PUBLIC_INTERFACE
-        /**
-         * Complete this timer as an alias for {@link #stop()}.
-         *
-         * @return the measured non-negative duration in milliseconds
-         */
         @Override
         public long finish() {
             return stop();
         }
 
-        // PUBLIC_INTERFACE
-        /**
-         * Return the completed timer's measured duration.
-         *
-         * @return measured non-negative duration in milliseconds
-         */
         @Override
         public synchronized long durationMs() {
             if (!completed) {
@@ -492,24 +459,7 @@ public final class StdoutLogger implements Logger {
 
     private void writeFinalEvent(Map<String, Object> finalEvent) {
         String serializedEvent = toJson(finalEvent);
-        if (fileTransport != null) {
-            fileTransport.writeJson(serializedEvent);
-            return;
-        }
-        if (httpTransport != null) {
-            httpTransport.writeJson(serializedEvent);
-            return;
-        }
-        if (otlpTransport != null) {
-            otlpTransport.writeEventMap(finalEvent);
-            return;
-        }
-
-        System.out.println(serializedEvent);
-    }
-
-    private void handleTransportFailure(RuntimeException exception) {
-        handleFailure(exception, Dt3ErrorPhase.DELIVERY, false);
+        sinkFanout.writeJson(serializedEvent, finalEvent);
     }
 
     private void handleFailure(
@@ -549,7 +499,7 @@ public final class StdoutLogger implements Logger {
             "event.name",
             suppliedEventName instanceof String ? suppliedEventName : GENERIC_EVENT
         );
-        event.put("schema.version", valueOrDefault(config.getSchemaVersion(), "1.0.0"));
+        event.put("schema.version", valueOrDefault(config.getSchemaVersion(), DEFAULT_SCHEMA_VERSION));
         event.put("sdk.name", valueOrDefault(config.getSdkName(), "dt3-commons-java"));
         event.put("sdk.version", valueOrDefault(config.getSdkVersion(), "0.1.0"));
         putIfConfigured(event, "service.name", config.getServiceName());
@@ -557,6 +507,7 @@ public final class StdoutLogger implements Logger {
         if (config.getDeploymentEnvironment() != null) {
             event.put("deployment.environment", config.getDeploymentEnvironment());
         }
+        applyComponentName(event);
         event.putAll(safeContext);
         event.put("timestamp", event.get("timestamp"));
         event.put("severity", severity);
@@ -565,7 +516,7 @@ public final class StdoutLogger implements Logger {
             "event.name",
             suppliedEventName instanceof String ? suppliedEventName : GENERIC_EVENT
         );
-        event.put("schema.version", valueOrDefault(config.getSchemaVersion(), "1.0.0"));
+        event.put("schema.version", valueOrDefault(config.getSchemaVersion(), DEFAULT_SCHEMA_VERSION));
         event.put("sdk.name", valueOrDefault(config.getSdkName(), "dt3-commons-java"));
         event.put("sdk.version", valueOrDefault(config.getSdkVersion(), "0.1.0"));
         putIfConfigured(event, "service.name", config.getServiceName());
@@ -575,6 +526,8 @@ public final class StdoutLogger implements Logger {
         if (config.getDeploymentEnvironment() != null) {
             event.put("deployment.environment", config.getDeploymentEnvironment());
         }
+        applyComponentName(event);
+        ensureEventId(event);
 
         if (error != null) {
             event.put("error.type", error.getClass().getSimpleName());
@@ -600,7 +553,7 @@ public final class StdoutLogger implements Logger {
         event.putAll(scopedContext);
         event.putIfAbsent("timestamp", Instant.now().toString());
         event.putIfAbsent("event.name", GENERIC_EVENT);
-        event.put("schema.version", valueOrDefault(config.getSchemaVersion(), "1.0.0"));
+        event.put("schema.version", valueOrDefault(config.getSchemaVersion(), DEFAULT_SCHEMA_VERSION));
         event.put("sdk.name", valueOrDefault(config.getSdkName(), "dt3-commons-java"));
         event.put("sdk.version", valueOrDefault(config.getSdkVersion(), "0.1.0"));
         putIfConfigured(event, "service.name", config.getServiceName());
@@ -609,7 +562,24 @@ public final class StdoutLogger implements Logger {
         removeIfNotConfigured(event, "service.name", config.getServiceName());
         removeIfNotConfigured(event, "service.version", config.getServiceVersion());
         removeIfNotConfigured(event, "deployment.environment", config.getDeploymentEnvironment());
+        applyComponentName(event);
+        ensureEventId(event);
         return event;
+    }
+
+    private void ensureEventId(Map<String, Object> event) {
+        Object eventId = event.get("event.id");
+        if (!(eventId instanceof String text) || text.isBlank()) {
+            event.put("event.id", UUID.randomUUID().toString());
+        }
+    }
+
+    private void applyComponentName(Map<String, Object> event) {
+        Object existing = event.get("component.name");
+        if (existing instanceof String text && !text.isBlank()) {
+            return;
+        }
+        putIfConfigured(event, "component.name", config.getComponentName());
     }
 
     private void ensureCorrelationId(Map<String, Object> context) {

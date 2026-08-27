@@ -2,6 +2,35 @@
 
 Full implementation of the DT3 Commons logging, tracing, and multi-tenancy SDK for Node.js 18+ and TypeScript.
 
+## Structured events (schema 1.1.0)
+
+Every event may carry `event.id` (auto-generated), `operation.id`, and
+`component.name`. Use typed builders and `EventEmitter` for API, database,
+messaging, and `kavia.*` AI events. Register additional sinks with
+`logger.registerSink` or configure `exporters: ['stdout', 'file']`. Create
+lightweight W3C spans with `logger.createTracer()`.
+
+```ts
+import { createLogger, EventEmitter, buildApiEvent } from '@digitalt3/commons';
+
+const logger = createLogger({
+  'service.name': 'orders-api',
+  'service.version': '1.0.0',
+  'deployment.environment': 'production',
+});
+const emitter = new EventEmitter(logger);
+emitter.emit(buildApiEvent('INCOMING_HTTP', {
+  message: 'GET /orders',
+  'http.request.method': 'GET',
+  'http.response.status_code': 200,
+}));
+
+const tracer = logger.createTracer!();
+tracer.withSpan('checkout', () => {
+  logger.info('step', { 'event.name': 'CHECKOUT_STEP' });
+});
+```
+
 ## Timer API
 
 Create an unstarted timer with `logger.createTimer`, then call `start()` and

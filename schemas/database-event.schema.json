@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://digitalt3.com/schemas/database-event/1.0.0",
+  "title": "DT3 Commons Database Event Attributes",
+  "description": "Well-known database attributes for canonical LogEvents",
+  "type": "object",
+  "properties": {
+    "event.name": {
+      "type": "string",
+      "enum": ["DB_QUERY_STARTED", "DB_QUERY_COMPLETED", "DB_QUERY_FAILED"]
+    },
+    "db.system": { "type": "string" },
+    "db.operation": { "type": "string" },
+    "db.name": { "type": "string" },
+    "db.sql.table": { "type": "string" },
+    "duration.ms": { "type": "number", "minimum": 0 }
+  },
+  "additionalProperties": true
+}

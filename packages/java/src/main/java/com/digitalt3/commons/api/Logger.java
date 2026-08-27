@@ -46,6 +46,26 @@ public interface Logger extends AutoCloseable {
 
     // PUBLIC_INTERFACE
     /**
+     * Register an additional export sink for concurrent fan-out.
+     *
+     * <p>Failures in one sink must not prevent delivery to other sinks.</p>
+     *
+     * @param sink transport to register
+     * @throws IllegalStateException if this logger is closed
+     */
+    void registerSink(LogTransport sink);
+
+    // PUBLIC_INTERFACE
+    /**
+     * Create a tracer bound to this logger for W3C-compatible span participation.
+     *
+     * @return a tracer that activates span context via {@link LogContext}
+     * @throws IllegalStateException if this logger is closed
+     */
+    Tracer createTracer();
+
+    // PUBLIC_INTERFACE
+    /**
      * Activate trace and correlation metadata for logs created on the current thread.
      *
      * <p>Use the returned scope with try-with-resources. Nested scopes inherit

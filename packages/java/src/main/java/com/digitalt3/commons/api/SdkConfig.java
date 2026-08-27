@@ -14,12 +14,14 @@ public class SdkConfig {
     private String serviceName;
     private String serviceVersion;
     private String deploymentEnvironment;
-    private String schemaVersion = "1.0.0";
+    private String componentName;
+    private String schemaVersion = "1.1.0";
     private String sdkName = "dt3-commons-java";
     private String sdkVersion = "0.1.0";
     private ValidationMode validationMode = ValidationMode.LENIENT;
     private boolean failOpen = true;
     private String exporter = "stdout";
+    private List<String> exporters = new ArrayList<>();
     private String filePath;
     private String httpEndpoint;
     private long httpTimeout = 5000;
@@ -35,6 +37,7 @@ public class SdkConfig {
     private int batchingMaxSize = 100;
     private long batchingFlushIntervalMs = 5000;
     private boolean autoGenerateCorrelationId;
+    private boolean tracingSpanEventsEnabled = true;
     private boolean errorDiagnosticsEnabled = true;
     private boolean errorDiagnosticsIncludeStack;
     private int errorRateLimitPerMinute = 20;
@@ -78,10 +81,12 @@ public class SdkConfig {
         setStringIfPresent(values, "service.name", this::setServiceName);
         setStringIfPresent(values, "service.version", this::setServiceVersion);
         setStringIfPresent(values, "deployment.environment", this::setDeploymentEnvironment);
+        setStringIfPresent(values, "component.name", this::setComponentName);
         setStringIfPresent(values, "schema.version", this::setSchemaVersion);
         setStringIfPresent(values, "sdk.name", this::setSdkName);
         setStringIfPresent(values, "sdk.version", this::setSdkVersion);
         setStringIfPresent(values, "exporter", this::setExporter);
+        setStringListIfPresent(values, "exporters", this::setExporters);
         setStringIfPresent(
             values,
             preferredKey(values, "exporter.file.path", "file.path"),
@@ -112,6 +117,16 @@ public class SdkConfig {
             values,
             "correlation.auto_generate",
             this::setAutoGenerateCorrelationId
+        );
+        setBooleanIfPresent(
+            values,
+            "tracing.auto_generate_correlation_id",
+            this::setAutoGenerateCorrelationId
+        );
+        setBooleanIfPresent(
+            values,
+            "tracing.span_events.enabled",
+            this::setTracingSpanEventsEnabled
         );
         setBooleanIfPresent(
             values,
@@ -300,6 +315,8 @@ public class SdkConfig {
     public void setDeploymentEnvironment(String deploymentEnvironment) {
         this.deploymentEnvironment = deploymentEnvironment;
     }
+    public String getComponentName() { return componentName; }
+    public void setComponentName(String componentName) { this.componentName = componentName; }
     public String getSchemaVersion() { return schemaVersion; }
     public void setSchemaVersion(String schemaVersion) { this.schemaVersion = schemaVersion; }
     public String getSdkName() { return sdkName; }
@@ -317,6 +334,28 @@ public class SdkConfig {
     public void setFailOpen(boolean failOpen) { this.failOpen = failOpen; }
     public String getExporter() { return exporter; }
     public void setExporter(String exporter) { this.exporter = exporter; }
+
+    /**
+     * Return configured exporters for multi-sink fan-out.
+     *
+     * <p>When non-empty, this list takes precedence over {@link #getExporter()}.</p>
+     *
+     * @return a defensive copy of exporter names
+     */
+    public List<String> getExporters() {
+        return List.copyOf(exporters);
+    }
+
+    /**
+     * Configure multiple exporters for concurrent fan-out.
+     *
+     * @param exporters exporter names ({@code stdout}, {@code file}, {@code http}, {@code otlp});
+     *                  {@code null} clears the list
+     */
+    public void setExporters(List<String> exporters) {
+        this.exporters = exporters == null ? new ArrayList<>() : new ArrayList<>(exporters);
+    }
+
     public String getFilePath() { return filePath; }
     public void setFilePath(String filePath) { this.filePath = filePath; }
     public String getHttpEndpoint() { return httpEndpoint; }
@@ -499,6 +538,26 @@ public class SdkConfig {
      */
     public void setAutoGenerateCorrelationId(boolean autoGenerateCorrelationId) {
         this.autoGenerateCorrelationId = autoGenerateCorrelationId;
+    }
+
+    // PUBLIC_INTERFACE
+    /**
+     * Return whether ending a span emits a completion LogEvent.
+     *
+     * @return {@code true} when span completion events are enabled (default)
+     */
+    public boolean isTracingSpanEventsEnabled() {
+        return tracingSpanEventsEnabled;
+    }
+
+    // PUBLIC_INTERFACE
+    /**
+     * Configure whether ending a span emits a completion LogEvent.
+     *
+     * @param tracingSpanEventsEnabled whether span completion events are emitted
+     */
+    public void setTracingSpanEventsEnabled(boolean tracingSpanEventsEnabled) {
+        this.tracingSpanEventsEnabled = tracingSpanEventsEnabled;
     }
 
     // PUBLIC_INTERFACE

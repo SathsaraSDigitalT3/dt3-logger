@@ -97,6 +97,14 @@ export interface LogEvent {
   /** Deployment environment (e.g. production, staging). */
   'deployment.environment': string;
 
+  /* ---- Identity fields (optional) ---- */
+  /** Unique event identifier; auto-generated when absent. */
+  'event.id'?: string;
+  /** Business/operation identifier distinct from span.id. */
+  'operation.id'?: string;
+  /** Emitting module or component name. */
+  'component.name'?: string;
+
   /* ---- Distributed-tracing fields (optional) ---- */
   'trace.id'?: string;
   'span.id'?: string;
@@ -182,8 +190,11 @@ export interface SdkConfig {
   /** Deployment environment, e.g. production / staging / development (required). */
   'deployment.environment': string;
 
-  /** Schema version string. Defaults to `'1.0.0'`. */
+  /** Schema version string. Defaults to `'1.1.0'`. */
   'schema.version'?: string;
+
+  /** Default component/module name attached to events when absent. */
+  'component.name'?: string;
 
   /** SDK identifier. Defaults to `'@digitalt3/commons'`. */
   'sdk.name'?: string;
@@ -211,6 +222,11 @@ export interface SdkConfig {
 
   /** Exporter backend: `'stdout'`, `'file'`, `'http'`, `'otlp'`. Defaults to `'stdout'`. */
   exporter?: string;
+
+  /**
+   * Multiple built-in exporters for fan-out. When set, takes precedence over `exporter`.
+   */
+  exporters?: string[];
 
   /** File path when exporter is `'file'`. */
   'exporter.file.path'?: string;
@@ -253,4 +269,7 @@ export interface SdkConfig {
 
   /** Generate a UUID correlation ID when a scoped value is absent. Defaults to `false`. */
   'tracing.auto_generate_correlation_id'?: boolean;
+
+  /** Emit span completion LogEvents when spans end. Defaults to `true`. */
+  'tracing.span_events.enabled'?: boolean;
 }

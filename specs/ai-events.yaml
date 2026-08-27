@@ -1,0 +1,79 @@
+spec:
+  name: ai-events
+  version: "1.0.0"
+  status: stable
+  description: >
+    AI observability event hierarchy for DT3 Commons using the kavia.* namespace.
+    Request and response events correlate via kavia.request.id.
+
+event_names:
+  - AI_PROMPT_SUBMITTED
+  - AI_RESPONSE_RECEIVED
+  - AI_TOOL_INVOCATION
+  - AI_MEMORY_RETRIEVAL
+  - AI_RAG_RETRIEVAL
+  - AI_AGENT_EXECUTION
+  - AI_SAFETY_FILTER_APPLIED
+
+attributes:
+  - name: kavia.provider
+    type: string
+    description: Model provider (e.g. openai, anthropic, azure)
+  - name: kavia.model
+    type: string
+    description: Model identifier
+  - name: kavia.model.version
+    type: string
+    description: Model version string
+  - name: kavia.prompt
+    type: string
+    description: Prompt payload (masked by default)
+  - name: kavia.response
+    type: string
+    description: Response payload (masked by default)
+  - name: kavia.tokens.prompt
+    type: integer
+    description: Prompt/input token count (do not name this field token)
+  - name: kavia.tokens.completion
+    type: integer
+    description: Completion/output token count
+  - name: kavia.tokens.total
+    type: integer
+    description: Total token count
+  - name: kavia.latency.ms
+    type: number
+    description: Model call latency in milliseconds
+  - name: kavia.cost
+    type: number
+    description: Estimated cost in billing currency units
+  - name: kavia.context_window.size
+    type: integer
+    description: Context window size in tokens
+  - name: kavia.memory.bytes
+    type: integer
+    description: Memory footprint in bytes when applicable
+  - name: kavia.conversation.id
+    type: string
+    description: Conversation identifier
+  - name: kavia.agent.id
+    type: string
+    description: Agent identifier
+  - name: kavia.request.id
+    type: string
+    description: Correlates AI request and response events
+  - name: kavia.finish_reason
+    type: string
+    description: Model finish reason
+  - name: kavia.cache.hit
+    type: boolean
+    description: Whether a cache hit served the response
+  - name: kavia.temperature
+    type: number
+    description: Sampling temperature
+  - name: kavia.max_tokens
+    type: integer
+    description: Max tokens configured for the request
+
+masking:
+  - Prompt and response payloads must be treated as sensitive by default
+  - Token-count attribute names must not use the literal field name token

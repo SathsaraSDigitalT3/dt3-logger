@@ -11,11 +11,13 @@
 DT3 Commons is a production-grade platform SDK that provides reusable components for:
 
 - **Unified Structured Logging** — JSON-structured, schema-validated log events
-- **Distributed Tracing** — W3C Trace Context compatible correlation
+- **Typed Domain & AI Events** — API, database, messaging, and `kavia.*` AI builders
+- **Event Emitter** — Typed emit helpers over the canonical `event()` pipeline
+- **Distributed Tracing** — W3C Trace Context plus lightweight in-SDK span creation
 - **Multi-Tenancy** — First-class tenant context propagation
-- **Sensitive Data Masking** — Recursive field-level redaction
+- **Sensitive Data Masking** — Recursive field-level redaction (including AI prompts/responses)
 - **Schema Validation** — Contract enforcement with STRICT/LENIENT/OFF modes
-- **Pluggable Exporters** — Stdout, File, HTTP, OTLP-compatible backends
+- **Pluggable Multi-Sink Export** — Fan-out to stdout, file, HTTP, OTLP, and custom sinks
 - **Adoption Accelerator** — Project templates, CI templates, compliance checks
 
 ## Architecture
@@ -30,15 +32,26 @@ integrations/   → Framework adapters (FastAPI, Express, Spring)
 bundles/        → Opinionated DT3 glue layers
 ```
 
+Pipeline:
+
+```
+App → Logger / EventEmitter / Tracer
+   → EventFactory (auto event.id)
+   → Enrichment → Masking → Validation → optional Batching
+   → MultiSinkFanout (per-sink failure isolation)
+```
+
 All SDKs implement the same cross-language contract:
 
 | Component | Python | Node.js/TS | Java | Go | C++ | Ruby |
 |-----------|--------|------------|------|----|-----|------|
-| Logger    | ✅ Full | ✅ Full   | 📋 API | 📝 Planned | 📝 Planned | 📝 Planned |
-| Timer     | ✅ Full | ✅ Full   | 📋 API | 📝 Planned | 📝 Planned | 📝 Planned |
-| Masking   | ✅ Full | ✅ Full   | 📋 API | 📝 Planned | 📝 Planned | 📝 Planned |
-| Validation| ✅ Full | ✅ Full   | 📋 API | 📝 Planned | 📝 Planned | 📝 Planned |
-| Exporters | ✅ Full | ✅ Full   | 📝 Planned | 📝 Planned | 📝 Planned | 📝 Planned |
+| Logger    | ✅ Full | ✅ Full   | ✅ Full | 📝 Planned | 📝 Planned | 📝 Planned |
+| Timer     | ✅ Full | ✅ Full   | ✅ Full | 📝 Planned | 📝 Planned | 📝 Planned |
+| Masking   | ✅ Full | ✅ Full   | ✅ Full | 📝 Planned | 📝 Planned | 📝 Planned |
+| Validation| ✅ Full | ✅ Full   | ✅ Full | 📝 Planned | 📝 Planned | 📝 Planned |
+| Exporters / Sinks | ✅ Full | ✅ Full | ✅ Full | 📝 Planned | 📝 Planned | 📝 Planned |
+| Domain / AI events | ✅ Full | ✅ Full | ✅ Full | 📝 Planned | 📝 Planned | 📝 Planned |
+| Tracer / Spans | ✅ Full | ✅ Full | ✅ Full | 📝 Planned | 📝 Planned | 📝 Planned |
 
 ## Quick Start
 
@@ -99,7 +112,7 @@ digitalt3-commons/
 ├── packages/               # Language-specific SDK packages
 │   ├── python/             # Python 3.10+ (full implementation)
 │   ├── node/               # Node.js/TypeScript (full implementation)
-│   ├── java/               # Java 17+ (API contracts only)
+│   ├── java/               # Java 17+ (full implementation)
 │   ├── go/                 # Go (planned)
 │   ├── cpp/                # C++ (planned)
 │   └── ruby/               # Ruby (planned)

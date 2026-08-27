@@ -4,6 +4,21 @@ attributes:
     description: Domain event name
     required: true
     source: OTel
+  - name: event.id
+    type: string
+    description: Unique event identifier (UUID)
+    required: false
+    source: DT3
+  - name: operation.id
+    type: string
+    description: Business operation identifier distinct from span.id
+    required: false
+    source: DT3
+  - name: component.name
+    type: string
+    description: Emitting module or component name
+    required: false
+    source: DT3
   - name: duration.ms
     type: number
     description: Duration in milliseconds
