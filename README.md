@@ -140,6 +140,8 @@ See [docs/folder-structure.md](docs/folder-structure.md) for detailed ownership 
 
 ## Documentation
 
+- [Test with a real application](docs/testing-with-real-apps.md) — FastAPI, Node, Java using packages as libraries (no clone)
+- [Developer user stories](docs/developer-user-stories.md) — practical features for app developers / interns
 - [Architecture](docs/architecture.md)
 - [Getting Started](docs/getting-started.md)
 - [Logging Standard](docs/logging-standard.md)
