@@ -22,8 +22,9 @@ class Dt3ErrorReport:
 
     code: Dt3ErrorCode
     phase: Dt3ErrorPhase
-    message: str
     retryable: bool
+    error_type: str
+    message: str
     error: BaseException
     occurrences: int
 
@@ -31,7 +32,7 @@ class Dt3ErrorReport:
     def to_fields(self) -> dict[str, Any]:
         """Return canonical schema fields describing this handled failure."""
         return {
-            "error.type": type(self.error).__name__,
+            "error.type": self.error_type,
             "error.message": self.message,
             "error.code": self.code.value,
             "error.retryable": self.retryable,
@@ -83,7 +84,7 @@ class ErrorHandler:
         error: BaseException,
         *,
         phase: Dt3ErrorPhase,
-        context: Optional[Mapping[str, str]] = None,
+        context: Optional[Mapping[str, object]] = None,
     ) -> None:
         """Record and observe a failure without applying a delivery disposition."""
         code, retryable = self.classify(error)
@@ -95,8 +96,9 @@ class ErrorHandler:
         report = Dt3ErrorReport(
             code=code,
             phase=phase,
-            message=str(error),
             retryable=retryable,
+            error_type=type(error).__name__,
+            message=str(error),
             error=error,
             occurrences=occurrences,
         )
@@ -117,7 +119,7 @@ class ErrorHandler:
         error: BaseException,
         *,
         phase: Dt3ErrorPhase,
-        context: Optional[Mapping[str, str]] = None,
+        context: Optional[Mapping[str, object]] = None,
     ) -> None:
         """Record a failure and apply the configured fail-open disposition."""
         self.report(error, phase=phase, context=context)
@@ -130,7 +132,7 @@ class ErrorHandler:
         operation: Callable[[], None],
         *,
         phase: Dt3ErrorPhase,
-        context: Optional[Mapping[str, str]] = None,
+        context: Optional[Mapping[str, object]] = None,
     ) -> bool:
         """Run an operation under the configured failure policy."""
         try:
@@ -154,11 +156,9 @@ class ErrorHandler:
         if isinstance(error, TypeError):
             return Dt3ErrorCode.SERIALIZATION_FAILED, False
         if isinstance(error, OSError):
-            return Dt3ErrorCode.TRANSPORT_UNAVAILABLE, True
+            return Dt3ErrorCode.FILE_WRITE_FAILED, True
         if isinstance(error, ValueError):
             return Dt3ErrorCode.CONFIGURATION_INVALID, False
-        if isinstance(error, RuntimeError):
-            return Dt3ErrorCode.LIFECYCLE_CLOSED, False
         return Dt3ErrorCode.UNKNOWN, False
 
     # PUBLIC_INTERFACE
@@ -185,37 +185,39 @@ class ErrorHandler:
     def _write_diagnostic(
         self,
         report: Dt3ErrorReport,
-        context: Mapping[str, str],
+        context: Mapping[str, object],
     ) -> None:
         """Write one best-effort diagnostic line without invoking the logger."""
         labels = " ".join(
-            f"{key}={value}" for key, value in sorted(context.items())
+            f"{key}={value}"
+            for key, value in sorted(context.items())
+            if self._is_safe_context_label(key, value)
         )
         line = (
             f"[dt3-sdk] level=error code={report.code.value} "
             f"phase={report.phase.value} "
             f"retryable={str(report.retryable).lower()} "
             f"occurrences={report.occurrences} "
-            f"type={type(report.error).__name__} "
-            f"message={report.message!r}"
+            f"type={report.error_type}"
         )
         if labels:
             line = f"{line} {labels}"
 
         try:
             self._stream.write(f"{line}\n")
-            if self._include_stack and report.error.__traceback__ is not None:
-                self._stream.write(
-                    "".join(
-                        traceback.format_exception(
-                            type(report.error),
-                            report.error,
-                            report.error.__traceback__,
-                        )
-                    )
-                )
             self._stream.flush()
         except Exception:
             # A broken diagnostic stream must not turn fail-open logging into an
             # application failure.
             pass
+
+    @staticmethod
+    def _is_safe_context_label(key: object, value: object) -> bool:
+        """Return whether a diagnostic context entry is a safe scalar label."""
+        return (
+            isinstance(key, str)
+            and key.replace("_", "").replace(".", "").isalnum()
+            and isinstance(value, (str, int, float, bool))
+            and "\n" not in str(value)
+            and "\r" not in str(value)
+        )

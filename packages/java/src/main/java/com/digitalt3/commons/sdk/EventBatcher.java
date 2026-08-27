@@ -19,6 +19,7 @@ import java.util.function.Consumer;
  */
 final class EventBatcher implements AutoCloseable {
     private final Consumer<Map<String, Object>> deliver;
+    private final Consumer<RuntimeException> timerFailureHandler;
     private final int maxSize;
     private final long flushIntervalMs;
     private final ScheduledExecutorService scheduler;
@@ -31,15 +32,21 @@ final class EventBatcher implements AutoCloseable {
      * Create a final-event batching buffer.
      *
      * @param deliver synchronous final-event delivery callback
+     * @param timerFailureHandler receives failures raised by the timer thread
      * @param maxSize positive count that causes an immediate flush
      * @param flushIntervalMs positive maximum pending interval in milliseconds
      */
     EventBatcher(
         Consumer<Map<String, Object>> deliver,
+        Consumer<RuntimeException> timerFailureHandler,
         int maxSize,
         long flushIntervalMs
     ) {
         this.deliver = Objects.requireNonNull(deliver, "deliver must not be null");
+        this.timerFailureHandler = Objects.requireNonNull(
+            timerFailureHandler,
+            "timerFailureHandler must not be null"
+        );
         if (maxSize <= 0) {
             throw new IllegalArgumentException("batching.max_size must be a positive integer");
         }
@@ -61,7 +68,12 @@ final class EventBatcher implements AutoCloseable {
      */
     synchronized void add(Map<String, Object> event) {
         if (closed) {
-            throw new IllegalStateException("Batcher is closed");
+            throw new Dt3SdkException(
+                "Batcher is closed",
+                Dt3ErrorCode.LIFECYCLE_CLOSED,
+                false,
+                Dt3ErrorPhase.LIFECYCLE
+            );
         }
 
         events.add(new java.util.LinkedHashMap<>(event));
@@ -112,11 +124,25 @@ final class EventBatcher implements AutoCloseable {
 
             try {
                 flushLocked();
-            } catch (RuntimeException ignored) {
-                // The logger delivery callback applies fail-open/fail-closed
-                // semantics. A timer thread cannot surface a synchronous error.
+            } catch (RuntimeException exception) {
+                abortLocked();
+                timerFailureHandler.accept(toBatchAbortedFailure(exception));
             }
         }
+    }
+
+    /**
+     * Prevent further buffering after a scheduled delivery failure.
+     *
+     * <p>Events are cleared because a failed timer flush has already removed its
+     * delivery batch from the buffer. Closing the batcher prevents future events
+     * from being accepted into an unusable delivery pipeline.</p>
+     */
+    private void abortLocked() {
+        closed = true;
+        cancelScheduledFlushLocked();
+        events.clear();
+        scheduler.shutdownNow();
     }
 
     private void flushLocked() {
@@ -129,15 +155,18 @@ final class EventBatcher implements AutoCloseable {
         events.clear();
 
         for (Map<String, Object> event : pendingEvents) {
-            try {
-                deliver.accept(event);
-            } catch (RuntimeException exception) {
-                // The failed event and the remaining events in this batch have
-                // already been removed from the buffer. Keep the batcher active
-                // so fail-open logging can accept and attempt later events.
-                throw exception;
-            }
+            deliver.accept(event);
         }
+    }
+
+    private RuntimeException toBatchAbortedFailure(RuntimeException exception) {
+        return new Dt3SdkException(
+            "Scheduled batch delivery aborted",
+            exception,
+            Dt3ErrorCode.BATCH_ABORTED,
+            false,
+            Dt3ErrorPhase.BATCHING
+        );
     }
 
     private void cancelScheduledFlushLocked() {

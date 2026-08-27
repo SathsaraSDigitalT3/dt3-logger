@@ -1,5 +1,5 @@
 import { LogEvent } from '../api/types';
-import { Dt3Error, Dt3ErrorCode, Dt3ErrorPhase } from './errors';
+import { Dt3Error, Dt3ErrorCode, Dt3ErrorPhase, Dt3LifecycleError } from './errors';
 
 /**
  * Callback used by EventBatcher to deliver one final canonical event.
@@ -63,7 +63,7 @@ export class EventBatcher {
    */
   public add(event: LogEvent): void {
     if (this.closed) {
-      throw new Error('Batcher is closed');
+      throw new Dt3LifecycleError('Batcher is closed');
     }
     if (this.aborted) {
       this.onError?.(

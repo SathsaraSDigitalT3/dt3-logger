@@ -3,6 +3,9 @@ package com.digitalt3.commons;
 import com.digitalt3.commons.api.Logger;
 import com.digitalt3.commons.api.LoggerFactory;
 import com.digitalt3.commons.api.SdkConfig;
+import com.digitalt3.commons.sdk.Dt3ErrorCode;
+import com.digitalt3.commons.sdk.Dt3ErrorPhase;
+import com.digitalt3.commons.sdk.Dt3SdkException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.Test;
@@ -98,10 +101,13 @@ public class BatchingTest {
         logger.close();
 
         assertEquals(List.of("CLOSE_EVENT"), eventNames(logFile));
-        assertThrows(
-            IllegalStateException.class,
+        Dt3SdkException exception = assertThrows(
+            Dt3SdkException.class,
             () -> logger.info("Closed", Map.of("event.name", "AFTER_CLOSE_EVENT"))
         );
+        assertEquals(Dt3ErrorCode.LIFECYCLE_CLOSED, exception.getCode());
+        assertEquals(Dt3ErrorPhase.LIFECYCLE, exception.getPhase());
+        assertFalse(exception.isRetryable());
     }
 
     @Test
@@ -131,6 +137,22 @@ public class BatchingTest {
     }
 
     @Test
+    public void diagnosticsStackConfigurationIsParsedFromCanonicalKey() {
+        SdkConfig config = SdkConfig.fromMap(Map.of(
+            "error.diagnostics.enabled", true,
+            "error.diagnostics.include_stack", true
+        ));
+
+        assertTrue(config.isErrorDiagnosticsEnabled());
+        assertTrue(config.isErrorDiagnosticsIncludeStack());
+
+        assertThrows(
+            IllegalArgumentException.class,
+            () -> SdkConfig.fromMap(Map.of("error.diagnostics.include_stack", "true"))
+        );
+    }
+
+    @Test
     public void batchDeliveryFailureHonorsFailOpenSetting() throws IOException {
         Path failOpenDestination = Files.createTempDirectory("dt3-batching-fail-open");
         Logger failOpenLogger = LoggerFactory.createLogger(
@@ -151,13 +173,17 @@ public class BatchingTest {
         failClosedLogger = LoggerFactory.createLogger(failClosedConfig);
 
         Logger finalFailClosedLogger = failClosedLogger;
-        assertThrows(
-            IllegalStateException.class,
+        Dt3SdkException exception = assertThrows(
+            Dt3SdkException.class,
             () -> finalFailClosedLogger.info(
                 "Fail closed",
                 Map.of("event.name", "FAIL_CLOSED_EVENT")
             )
         );
+        assertEquals(Dt3ErrorCode.FILE_WRITE_FAILED, exception.getCode());
+        assertEquals(Dt3ErrorPhase.DELIVERY, exception.getPhase());
+        assertFalse(exception.isRetryable());
+        assertTrue(exception.getCause() instanceof IOException);
         failClosedLogger.close();
     }
 

@@ -104,15 +104,30 @@ public final class HttpTransport implements LogTransport {
             );
             int status = response.statusCode();
             if (status < 200 || status >= 300) {
-                throw new HttpTransportError("HTTP export failed with status " + status);
+                throw new HttpTransportError(status);
             }
         } catch (java.net.http.HttpTimeoutException exception) {
-            throw new HttpTransportError("HTTP export request timed out", exception);
+            throw new HttpTransportError(
+                "HTTP export request timed out",
+                exception,
+                Dt3ErrorCode.TRANSPORT_TIMEOUT,
+                true
+            );
         } catch (InterruptedException exception) {
             Thread.currentThread().interrupt();
-            throw new HttpTransportError("HTTP export request interrupted", exception);
+            throw new HttpTransportError(
+                "HTTP export request interrupted",
+                exception,
+                Dt3ErrorCode.TRANSPORT_UNAVAILABLE,
+                true
+            );
         } catch (IOException exception) {
-            throw new HttpTransportError("HTTP export request failed", exception);
+            throw new HttpTransportError(
+                "HTTP export request failed",
+                exception,
+                Dt3ErrorCode.TRANSPORT_UNAVAILABLE,
+                true
+            );
         }
     }
 

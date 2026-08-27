@@ -341,12 +341,11 @@ public class MapValidationTest {
 
     @Test
     public void nullValidationModeIsRejectedRatherThanDisablingValidation() {
-        SdkConfig config = validConfig(null);
-        Logger logger = LoggerFactory.createLogger(config);
+        SdkConfig config = validConfig(ValidationMode.LENIENT);
 
         assertThrows(
             IllegalArgumentException.class,
-            () -> logger.info("Validation test", Map.of("event.name", "USER_LOGIN"))
+            () -> config.setValidationMode(null)
         );
     }
 

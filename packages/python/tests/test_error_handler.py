@@ -44,8 +44,12 @@ def test_handler_classifies_taxonomy_and_legacy_exception_types() -> None:
         True,
     )
     assert handler.classify(OSError("unavailable")) == (
-        Dt3ErrorCode.TRANSPORT_UNAVAILABLE,
+        Dt3ErrorCode.FILE_WRITE_FAILED,
         True,
+    )
+    assert handler.classify(RuntimeError("callback unavailable")) == (
+        Dt3ErrorCode.UNKNOWN,
+        False,
     )
     assert handler.classify(Exception("unknown")) == (Dt3ErrorCode.UNKNOWN, False)
 
@@ -64,10 +68,10 @@ def test_handler_rate_limits_diagnostics_per_error_code() -> None:
 
     lines = stream.getvalue().splitlines()
     assert len(lines) == 2
-    assert "DT3_TRANSPORT_UNAVAILABLE" in lines[0]
+    assert "DT3_FILE_WRITE_FAILED" in lines[0]
     assert "DT3_CONFIG_INVALID" in lines[1]
     assert handler.snapshot() == {
-        "DT3_TRANSPORT_UNAVAILABLE": 2,
+        "DT3_FILE_WRITE_FAILED": 2,
         "DT3_CONFIG_INVALID": 1,
     }
 
@@ -96,7 +100,31 @@ def test_handler_swallows_callback_and_diagnostic_sink_failures() -> None:
     )
 
     handler.handle(OSError("delivery failed"), phase=Dt3ErrorPhase.DELIVERY)
-    assert handler.snapshot() == {"DT3_TRANSPORT_UNAVAILABLE": 1}
+    assert handler.snapshot() == {"DT3_FILE_WRITE_FAILED": 1}
+
+
+def test_handler_sanitizes_diagnostic_context_labels() -> None:
+    """Diagnostics must exclude unsafe context values and line-injection attempts."""
+    stream = io.StringIO()
+    handler = ErrorHandler(diagnostics_stream=stream)
+
+    handler.report(
+        ValueError("invalid"),
+        phase=Dt3ErrorPhase.CONFIGURATION,
+        context={
+            "request.id": "safe-123",
+            "line\ninjection": "unsafe",
+            "unsafe_value": "first\nsecond",
+            "object": object(),
+        },
+    )
+
+    line = stream.getvalue()
+    assert line.count("\n") == 1
+    assert "request.id=safe-123" in line
+    assert "line\ninjection" not in line
+    assert "unsafe_value" not in line
+    assert "object=" not in line
 
 
 @pytest.mark.parametrize("fatal", [KeyboardInterrupt(), SystemExit(), MemoryError()])
@@ -257,3 +285,73 @@ def test_strict_validation_reports_once_then_raises_with_fail_closed_delivery(
     assert len(reports) == 1
     assert reports[0].phase is Dt3ErrorPhase.VALIDATION
     assert logger.error_snapshot() == {"DT3_VALIDATION_FAILED": 1}
+
+
+def test_closed_logger_lifecycle_failure_is_reported() -> None:
+    """Closed logger calls remain fail-closed and create a lifecycle report."""
+    reports: list[Any] = []
+    logger = create_logger(_config(**{"error.on_error": reports.append}))
+    logger.close()
+
+    with pytest.raises(RuntimeError, match="Logger is closed"):
+        logger.info("Closed", {"event.name": "CLOSED_LOGGER"})
+
+    assert reports[-1].code is Dt3ErrorCode.LIFECYCLE_CLOSED
+    assert reports[-1].phase is Dt3ErrorPhase.LIFECYCLE
+
+
+def test_constructor_configuration_failure_is_reported_before_reraise() -> None:
+    """Invalid construction settings notify the configured ErrorHandler observer."""
+    reports: list[Any] = []
+
+    with pytest.raises(ValueError, match="fail_open must be a boolean"):
+        create_logger(_config(fail_open="invalid", **{"error.on_error": reports.append}))
+
+    assert reports[-1].code is Dt3ErrorCode.CONFIGURATION_INVALID
+    assert reports[-1].phase is Dt3ErrorPhase.CONFIGURATION
+
+
+def test_constructor_invalid_rate_limit_is_reported_before_reraise() -> None:
+    """An invalid rate limit must not prevent reporting the construction error."""
+    reports: list[Any] = []
+
+    with pytest.raises(ValueError, match="error.rate_limit_per_minute"):
+        create_logger(
+            _config(
+                **{
+                    "error.rate_limit_per_minute": "invalid",
+                    "error.on_error": reports.append,
+                }
+            )
+        )
+
+    assert reports[-1].code is Dt3ErrorCode.CONFIGURATION_INVALID
+    assert reports[-1].phase is Dt3ErrorPhase.CONFIGURATION
+
+
+def test_constructor_reporting_does_not_stringify_an_invalid_exporter(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Construction diagnostics must not invoke an arbitrary exporter __str__ method."""
+
+    class ExporterWithBrokenStringConversion:
+        """Exporter-like value whose string conversion is unsafe."""
+
+        def __str__(self) -> str:
+            """Fail if diagnostic reporting attempts to stringify this value."""
+            raise AssertionError("exporter values must not be stringified")
+
+    reports: list[Any] = []
+    invalid_exporter = ExporterWithBrokenStringConversion()
+
+    with pytest.raises(Exception):
+        create_logger(
+            _config(
+                exporter=invalid_exporter,
+                **{"error.on_error": reports.append},
+            )
+        )
+
+    assert reports[-1].code is Dt3ErrorCode.CONFIGURATION_INVALID
+    assert reports[-1].phase is Dt3ErrorPhase.CONFIGURATION
+    assert "exporter=invalid" in capsys.readouterr().err
