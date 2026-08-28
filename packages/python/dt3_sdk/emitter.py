@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, Mapping, Optional
+from typing import Any, Mapping
 
 from dt3_sdk.events.ai import build_ai_event
 from dt3_sdk.events.api import build_api_event

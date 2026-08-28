@@ -3,7 +3,6 @@ import {
   EventEmitter,
   MaskingEngine,
   buildApiEvent,
-  buildAiEvent,
   buildAiRequestEvent,
   buildAiResponseEvent,
 } from '../src';
