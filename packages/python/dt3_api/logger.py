@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any, Dict, Mapping, Optional, Protocol
 
+from .timer import Timer
+
 
 class Logger(Protocol):
     """Public interface for emitting DT3 log events and creating timers."""

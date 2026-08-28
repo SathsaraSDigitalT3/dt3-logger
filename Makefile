@@ -27,10 +27,10 @@ test-java:
 lint: lint-python lint-node
 
 lint-python:
-	cd packages/python && python -m ruff check .
+	cd packages/python && python -m ruff check dt3_sdk dt3_api
 
 lint-node:
-	cd packages/node && npx eslint src/
+	cd packages/node && npx eslint "src/**/*.ts" "tests/**/*.ts"
 
 # Schema validation
 validate-schemas:

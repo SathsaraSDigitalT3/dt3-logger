@@ -5,7 +5,7 @@ from __future__ import annotations
 import traceback
 import uuid
 from datetime import datetime, timezone
-from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from dt3_sdk.batching import EventBatcher
 from dt3_sdk.context import ensure_correlation_id, get_active_logger_context
@@ -17,6 +17,10 @@ from dt3_sdk.masking import MaskingEngine
 from dt3_sdk.otlp_transport import OtlpTransport
 from dt3_sdk.sink import EventSink, MultiSinkFanout, StdoutSink
 from dt3_sdk.validation import LogEventValidator, ValidationError
+
+if TYPE_CHECKING:
+    from dt3_sdk.timer import TimerImpl
+    from dt3_sdk.tracer import Tracer
 
 
 class LoggerImpl:

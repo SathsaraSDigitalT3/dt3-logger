@@ -13,7 +13,6 @@ from jsonschema import Draft202012Validator, FormatChecker
 
 from .errors import Dt3Error, Dt3ErrorCode, Dt3ErrorPhase
 
-
 _FORMAT_CHECKER = FormatChecker()
 
 
